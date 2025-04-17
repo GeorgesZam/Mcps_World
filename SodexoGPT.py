@@ -3,14 +3,14 @@ import importlib.util
 import os
 import glob
 import sys
+import openai
+import json
 from datetime import datetime
 from typing import Any, Dict, List
-import openai
-import re
 
 st.set_page_config(page_title="🧑‍💻 All-in-one LLM Plugin Platform", page_icon="💡")
 
-# ---- 1. Initialisation session state ----
+# -------- 1. Initialisation de l'état de session --------
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
     st.session_state.history = []
@@ -18,9 +18,9 @@ if "initialized" not in st.session_state:
     st.session_state.cfg = {}
     st.session_state.session_id = f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
-st.title("🛠️ Plateforme LLM+Tools (All-In-One, 100% Streamlit)")
+st.title("🛠️ Plateforme LLM+Tools (OpenAI/Azure tool-calling natif)")
 
-# ---- 2. Config API LLM ----
+# -------- 2. Configuration API LLM --------
 if not st.session_state.initialized:
     st.subheader("Configuration API LLM")
     provider = st.selectbox("Fournisseur LLM", ["Ollama", "OpenAI", "Azure OpenAI"], index=2)
@@ -33,8 +33,8 @@ if not st.session_state.initialized:
     else:  # Azure
         ep = st.text_input("Azure Endpoint", value="https://...")
         azkey = st.text_input("Azure API Key", type="password")
-        model = st.text_input("Nom du modèle Azure", value="gpt-4o-mini")
-        apiver = st.text_input("API Version", value="2023-03-15-preview")
+        model = st.text_input("Nom du modèle Azure (deployment)", value="gpt-4o")
+        apiver = st.text_input("API Version", value="2024-02-15-preview")
         st.session_state.cfg = {
             "provider": "azure",
             "endpoint": ep, "key": azkey, "model": model, "apiver": apiver
@@ -46,7 +46,7 @@ if not st.session_state.initialized:
 
 config = st.session_state.cfg
 
-# ---- 3. Gestion tools/ dynamiques ----
+# -------- 3. Gestion Tools dynamiques --------
 TOOLS_FOLDER = "tools"
 os.makedirs(TOOLS_FOLDER, exist_ok=True)
 
@@ -59,12 +59,10 @@ def load_tools() -> Dict[str,Any]:
             mod = importlib.util.module_from_spec(spec)
             sys.modules[f"tools.{tool_name}"] = mod
             spec.loader.exec_module(mod)
-            # Fallback triggers: nom du tool seul si rien de défini
             schema = getattr(mod, "function_schema", {
-                "type": "object", "properties": {}, "required": []
+                "type": "object", "properties": {}, "required": [],
+                "name": tool_name, "description": tool_name
             })
-            if not schema.get("triggers"):
-                schema["triggers"] = [tool_name]
             tool_modules[tool_name] = {
                 "function_call": mod.function_call,
                 "schema": schema,
@@ -80,9 +78,8 @@ elif not st.session_state.tools:
     st.session_state.tools = load_tools()
 tools = st.session_state.tools
 
-# ---- 4. Sidebar tools: load/upload/suppr/test/debug triggers ----
+# -------- 4. Sidebar tools: upload/suppr/test --------
 st.sidebar.header("🧩 Gestion des Tools")
-
 with st.sidebar.expander("➕ Ajouter nouveau tool"):
     uploaded = st.file_uploader("Charger un script tool-xxx.py", type="py")
     if uploaded:
@@ -110,111 +107,109 @@ with st.sidebar.expander("🗑️ Supprimer/un tool"):
 with st.sidebar.expander("📋 Liste & Test outil"):
     for tname, tinfo in tools.items():
         st.write(f"**{tname}** - {os.path.basename(tinfo['source'])}")
-        st.write(f"⚡ **Triggers**: {', '.join(map(str, tinfo['schema'].get('triggers',[])))}")
         with st.form(f"test_{tname}"):
             params = {}
-            for pname, pinf in tinfo["schema"].get("properties", {}).items():
+            schema = tinfo["schema"]
+            for pname, pinf in schema.get("properties", {}).items():
                 val = st.text_input(f"{tname} – {pname}: {pinf.get('description','')}")
                 params[pname] = val
             if st.form_submit_button("Tester"):
                 try:
-                    result = tinfo["function_call"](**{k: float(v) if v.replace('.','',1).isdigit() else v for k,v in params.items()})
+                    typed_params = {}
+                    for k, v in params.items():
+                        # auto convert number if possible
+                        try:
+                            if schema["properties"][k]["type"] == "number":
+                                typed_params[k] = float(v)
+                            elif schema["properties"][k]["type"] == "integer":
+                                typed_params[k] = int(v)
+                            else:
+                                typed_params[k] = v
+                        except Exception:
+                            typed_params[k] = v
+                    result = tinfo["function_call"](**typed_params)
                     st.success(f"Résultat: {result}")
                 except Exception as ex:
                     st.error(str(ex))
 
-# ---- 5. Appel LLM + outils + triggers dynamiques ----
-def call_llm(messages: List[Dict], tools: Dict[str,Any]=None) -> Dict:
-    last = messages[-1]["content"].lower()
-    steps = []
-    tool_results = {}
-    if tools:
-        for tname, tinfo in tools.items():
-            schema = tinfo.get('schema', {})
-            triggers = schema.get("triggers", [tname])
+# -------- 5. Appel LLM natif tool-calling OpenAI/Azure --------
+def call_llm(messages: List[Dict], tools: Dict[str, Any]=None) -> Dict:
+    tool_defs = []
+    tool_calls = {}
+    for tname, tinfo in (tools or {}).items():
+        schema = tinfo.get("schema", {})
+        tool_defs.append({
+            "type": "function",  # ← INDISPENSABLE !
+            "name": schema.get("name", tname),
+            "description": schema.get("description", tname),
+            "parameters": {
+                k: v for k, v in schema.items() if k in ("type", "properties", "required")
+            }
+        })
+        tool_calls[schema.get("name",tname)] = tinfo["function_call"]
 
-            # Matching par simple inclusion
-            trig_found = any(trig.lower() in last for trig in triggers)
+    config = st.session_state.cfg
+    chat = messages.copy()
+    all_steps = []
 
-            # Option: trigger par regex aussi
-            triggers_regex = schema.get("triggers_regex", [])
-            regex_found = any(re.search(rgx, last) for rgx in triggers_regex)
-
-            if trig_found or regex_found:
-                # Addition spéciale
-                if tname == "add":
-                    nums = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", last)
-                    if len(nums)>=2:
-                        n1, n2 = map(float, nums[:2])
-                        out = tinfo["function_call"](n1, n2)
-                        steps.append({"tool":tname,"args":{"number1":n1,"number2":n2},"output": out})
-                        tool_results[tname] = out
-                else:
-                    out = tinfo["function_call"]()
-                    steps.append({"tool":tname,"args":{},"output":out})
-                    tool_results[tname] = out
-
-    # --- Génération explicative multi-tool ---
-    if steps:
-        system_instructions = (
-            "Voici les résultats de fonctions/outils spécialisés appelés pour cette question. "
-            "Utilise-les pour composer ta réponse de façon claire, concise et polie.\n"
-        )
-        for stp in steps:
-            system_instructions += f"[TOOL {stp['tool']}] Résultat: {stp['output']} (args={stp['args']})\n"
-
-        new_messages = [{"role": "system", "content": system_instructions}] + messages
-
-        content = ""
-        if config["provider"]=="openai":
+    if config["provider"] in ("openai", "azure"):
+        if config["provider"] == "openai":
             openai.api_key = config["key"]
-            resp = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo", messages=new_messages
-            )
-            content += resp["choices"][0]["message"]["content"]
-        elif config["provider"]=="azure":
+            params = {
+                "model": "gpt-4o",
+                "messages": chat,
+                "tools": tool_defs,
+                "tool_choice": "auto"
+            }
+        else:  # Azure
             openai.api_type = "azure"
             openai.api_version = config["apiver"]
             openai.api_key = config["key"]
             openai.api_base = config["endpoint"]
-            resp = openai.ChatCompletion.create(
-                engine=config["model"], messages=new_messages
-            )
-            content += resp["choices"][0]["message"]["content"]
-        else:
-            content += "Demo : Voici les résultats des outils :" + str(tool_results)
-        content += "\n\n(Détail des étapes outils ci-dessous)"
-        return {"role":"assistant", "content":content, "tools_steps":steps}
-
-    # --- Si aucun outil, LLM seul ---
-    content = ""
-    if config["provider"]=="openai":
-        openai.api_key = config["key"]
-        resp = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo", messages=messages
-        )
-        content += resp["choices"][0]["message"]["content"]
-    elif config["provider"]=="azure":
-        openai.api_type = "azure"
-        openai.api_version = config["apiver"]
-        openai.api_key = config["key"]
-        openai.api_base = config["endpoint"]
-        resp = openai.ChatCompletion.create(
-            engine=config["model"], messages=messages
-        )
-        content += resp["choices"][0]["message"]["content"]
+            params = {
+                "engine": config["model"],
+                "messages": chat,
+                "tools": tool_defs,
+                "tool_choice": "auto"
+            }
+        need_tool = True
+        content = ""
+        while need_tool:
+            resp = openai.ChatCompletion.create(**params)
+            m = resp["choices"][0]["message"]
+            if m.get("tool_calls"):
+                for call in m["tool_calls"]:
+                    toolname = call["function"]["name"]
+                    args = json.loads(call["function"]["arguments"])
+                    tool_res = tool_calls[toolname](**args)
+                    all_steps.append({"tool": toolname, "args": args, "output": tool_res})
+                    chat.append({
+                        "tool_call_id": call["id"],
+                        "role": "tool",
+                        "name": toolname,
+                        "content": str(tool_res)
+                    })
+                params["messages"] = chat
+            else:
+                need_tool = False
+                content = m["content"]
+        return {"role": "assistant", "content": content, "tools_steps": all_steps}
     else:
-        content = "(Réponse LLM simulée - demo locale)"
-    return {"role":"assistant", "content":content, "tools_steps":[]}
+        # Ollama/demo fallback
+        return {"role": "assistant", "content": "(Réponse LLM simulée/demo locale)", "tools_steps": []}
 
-# ---- 6. Affichage chat ----
+# -------- 6. Affichage chat --------
 st.subheader("💬 Conversation")
 for m in st.session_state.history:
     with st.chat_message(m["role"]):
         st.write(m["content"])
+        if m.get("tools_steps"):
+            st.write("**Détail outils utilisés :**")
+            for stp in m["tools_steps"]:
+                st.info(f"> **{stp['tool']}** — Args: `{stp['args']}` — Résultat: `{stp['output']}`")
 
 if prompt := st.chat_input("Votre message..."):
-    hmsg = {"role":"user", "content":prompt}
+    hmsg = {"role": "user", "content": prompt}
     st.session_state.history.append(hmsg)
     with st.spinner("En réflexion..."):
         reponse = call_llm(st.session_state.history, tools)
