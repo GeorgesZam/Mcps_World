@@ -1,13 +1,5 @@
 def function_call(a: float, b: float) -> float:
-    return a + b
+    return float(a) + float(b)
 
-function_schema = {
-    "name": "add",
-    "description": "Addition de 2 nombres",
-    "type": "object",
-    "properties": {
-        "a": {"type": "number", "description": "Nombre 1"},
-        "b": {"type": "number", "description": "Nombre 2"},
-    },
-    "required": ["a", "b"]
-}
+matcher = lambda prompt: "addition" in prompt or "add" in prompt or "+" in prompt
+__doc__ = "Addition de deux nombres, usage: addition a=2 b=3"
