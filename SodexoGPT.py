@@ -1,187 +1,151 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
-from typing import Dict, List, Any, Optional
-import importlib.util
+import streamlit as st
 import os
-import glob
-import json
-from pydantic import BaseModel
-import uvicorn
+import importlib.util
 import openai
-import logging
+from datetime import datetime
+import json
+from typing import Dict, List, Any
 
 # Configuration
-TOOL_DIR = 'tools'
-os.makedirs(TOOL_DIR, exist_ok=True)
-PORT = 8000
-HOST = "0.0.0.0"
+TOOLS_DIR = "tools"
+os.makedirs(TOOLS_DIR, exist_ok=True)
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Models
-class UserMessage(BaseModel):
-    content: str
-    session_id: Optional[str] = None
-
-class BotResponse(BaseModel):
-    content: str
-    session_id: str
-    tool_used: Optional[str] = None
-    tool_result: Optional[Any] = None
-
-class ToolRegistration(BaseModel):
-    tool_name: str
-    tool_code: str
-
-app = FastAPI(
-    title="MCP Azure Server",
-    description="Serveur pour conversations avec Azure OpenAI et outils externes"
-)
-
-# State
-active_sessions: Dict[str, List[Dict]] = {}
-available_tools: Dict[str, Dict[str, Any]] = {}
-
-# Initialize OpenAI client
-def init_openai():
-    openai.api_type = "azure"
-    openai.api_key = os.getenv("AZURE_OPENAI_KEY")
-    openai.api_base = os.getenv("AZURE_OPENAI_ENDPOINT")
-    openai.api_version = os.getenv("AZURE_API_VERSION", "2023-03-15-preview")
-
-# Helper functions
-def load_tool_module(module_path: str) -> Dict[str, Any]:
-    """Charge dynamiquement un module d'outil"""
-    try:
-        module_name = os.path.splitext(os.path.basename(module_path))[0]
-        spec = importlib.util.spec_from_file_location(module_name, module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        
-        return {
-            'function': module.function_call,
-            'schema': getattr(module, 'function_schema', None),
-            'doc': getattr(module.function_call, '__doc__', 'No documentation')
-        }
-    except Exception as e:
-        logger.error(f"Error loading tool {module_path}: {str(e)}")
-        raise
-
-def load_all_tools() -> Dict[str, Dict[str, Any]]:
-    """Charge tous les outils disponibles"""
-    tools = {}
-    for tool_path in glob.glob(os.path.join(TOOL_DIR, '*.py')):
-        try:
-            tool_name = os.path.splitext(os.path.basename(tool_path))[0]
-            tools[tool_name] = load_tool_module(tool_path)
-            logger.info(f"Successfully loaded tool: {tool_name}")
-        except Exception as e:
-            logger.error(f"Failed to load tool {tool_path}: {str(e)}")
-    return tools
-
-def get_tools_for_llm() -> List[Dict]:
-    """Prépare la description des outils pour l'API OpenAI"""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": tool_name,
-                "description": tool_data.get('doc', f"Execute {tool_name} tool"),
-                "parameters": tool_data['schema'] if tool_data['schema'] else {}
-            }
-        }
-        for tool_name, tool_data in available_tools.items()
-    ]
-
-# API Endpoints
-@app.post("/chat", response_model=BotResponse)
-async def chat_endpoint(message: UserMessage):
-    """Endpoint principal pour les conversations avec le LLM"""
-    try:
-        messages = [{"role": "user", "content": message.content}]
-        tools = get_tools_for_llm()
-        
-        response = openai.ChatCompletion.create(
-            engine=os.getenv("AZURE_OPENAI_MODEL", "gpt-4"),
-            messages=messages,
-            tools=tools if tools else None,
-            tool_choice="auto" if tools else None
-        )
-        
-        assistant_message = response.choices[0].message
-        content = assistant_message.get('content', '')
-        tool_calls = getattr(assistant_message, 'tool_calls', None)
-        
-        # Handle tool calls
-        tool_used = None
-        tool_result = None
-        
-        if tool_calls:
-            for tool_call in tool_calls:
-                tool_name = tool_call.function.name
-                if tool_name in available_tools:
-                    try:
-                        # Execute the tool
-                        args = json.loads(tool_call.function.arguments)
-                        tool_result = available_tools[tool_name]['function'](**args)
-                        tool_used = tool_name
-                    except Exception as e:
-                        logger.error(f"Tool execution error: {str(e)}")
-                        content = f"Error executing tool {tool_name}: {str(e)}"
-        
-        return BotResponse(
-            content=content,
-            session_id=message.session_id or "default",
-            tool_used=tool_used,
-            tool_result=tool_result
-        )
-        
-    except Exception as e:
-        logger.error(f"Chat error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/tools/register")
-async def register_tool(tool: ToolRegistration):
-    """Enregistre un nouvel outil"""
-    try:
-        tool_path = os.path.join(TOOL_DIR, f"{tool.tool_name}.py")
-        with open(tool_path, 'w') as f:
-            f.write(tool.tool_code)
-        
-        # Reload tools
-        global available_tools
-        available_tools = load_all_tools()
-        
-        return JSONResponse(
-            content={"status": "success", "tool": tool.tool_name},
-            status_code=200
-        )
-    except Exception as e:
-        logger.error(f"Tool registration error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/tools/list")
-async def list_tools():
-    """Liste tous les outils disponibles"""
+# --- Gestion sécurisée des credentials ---
+def get_azure_config():
+    """Récupère la config Azure depuis les secrets ou variables d'environnement"""
     return {
-        "tools": list(available_tools.keys()),
-        "count": len(available_tools)
+        "api_key": st.secrets.get("AZURE_OPENAI_KEY", os.getenv("AZURE_OPENAI_KEY")),
+        "api_base": st.secrets.get("AZURE_OPENAI_ENDPOINT", os.getenv("AZURE_OPENAI_ENDPOINT")),
+        "api_version": "2023-03-15-preview",
+        "engine": "gpt-4"
     }
 
-@app.get("/status")
-async def status_check():
-    """Endpoint de santé"""
-    return {"status": "ok", "tools_loaded": len(available_tools)}
+# --- Gestion des outils ---
+class ToolManager:
+    @staticmethod
+    def list_available_tools() -> List[str]:
+        """Liste les noms des outils disponibles"""
+        return [f[:-3] for f in os.listdir(TOOLS_DIR) if f.endswith('.py')]
 
-# Initialization
-def initialize():
-    init_openai()
-    global available_tools
-    available_tools = load_all_tools()
-    logger.info(f"Server initialized with {len(available_tools)} tools")
+    @staticmethod
+    def load_tool(tool_name: str) -> Dict[str, Any]:
+        """Charge un outil spécifique"""
+        try:
+            spec = importlib.util.spec_from_file_location(
+                tool_name, 
+                os.path.join(TOOLS_DIR, f"{tool_name}.py")
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return {
+                "function": module.function_call,
+                "schema": module.function_schema
+            }
+        except Exception as e:
+            st.error(f"Erreur de chargement de l'outil {tool_name}: {str(e)}")
+            raise
+
+# --- Interface Streamlit ---
+def main():
+    st.title("🚀 MCP Client - Azure OpenAI")
+    
+    # Initialisation de la session
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = []
+        st.session_state.tools_loaded = False
+
+    # Sidebar pour la configuration
+    with st.sidebar:
+        st.subheader("Configuration Azure")
+        config = get_azure_config()
+        
+        api_key = st.text_input("Clé API", type="password", value=config["api_key"])
+        api_base = st.text_input("Endpoint", value=config["api_base"])
+        engine = st.selectbox("Modèle", ["gpt-4", "gpt-35-turbo"])
+
+        if st.button("Connecter"):
+            openai.api_type = "azure"
+            openai.api_version = config["api_version"]
+            openai.api_key = api_key
+            openai.api_base = api_base
+            
+            st.session_state.tools_loaded = True
+            st.success("Connecté à Azure OpenAI!")
+
+    # Onglets principaux
+    tab_chat, tab_tools = st.tabs(["💬 Chat", "🛠️ Outils"])
+
+    with tab_chat:
+        # Afficher l'historique de conversation
+        for msg in st.session_state.conversation:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+                if "timestamp" in msg:
+                    st.caption(msg["timestamp"])
+
+        # Nouveau message utilisateur
+        if prompt := st.chat_input("Tapez votre message..."):
+            user_msg = {"role": "user", "content": prompt, "timestamp": datetime.now().strftime("%H:%M:%S")}
+            st.session_state.conversation.append(user_msg)
+            
+            with st.chat_message("user"):
+                st.write(prompt)
+                st.caption(user_msg["timestamp"])
+
+            # Appel à Azure OpenAI
+            with st.spinner("Génération en cours..."):
+                try:
+                    response = openai.ChatCompletion.create(
+                        engine=engine,
+                        messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.conversation],
+                        max_tokens=500
+                    )
+                    
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": response.choices[0].message.content,
+                        "timestamp": datetime.now().strftime("%H:%M:%S")
+                    }
+                    
+                    st.session_state.conversation.append(assistant_msg)
+                    
+                    with st.chat_message("assistant"):
+                        st.write(assistant_msg["content"])
+                        st.caption(assistant_msg["timestamp"])
+                
+                except Exception as e:
+                    st.error(f"Erreur de l'API: {str(e)}")
+
+    with tab_tools:
+        if st.session_state.get("tools_loaded", False):
+            st.write("### Outils disponibles")
+            
+            selected_tool = st.selectbox(
+                "Sélectionnez un outil",
+                ToolManager.list_available_tools()
+            )
+            
+            if selected_tool:
+                tool_data = ToolManager.load_tool(selected_tool)
+                
+                st.write(f"**Description:** {tool_data.get('schema', {}).get('description', 'Non spécifiée')}")
+                
+                # Génération dynamique du formulaire basé sur le schema
+                tool_args = {}
+                for param, props in tool_data["schema"]["properties"].items():
+                    if props["type"] == "number":
+                        tool_args[param] = st.number_input(param)
+                    else:
+                        tool_args[param] = st.text_input(param)
+                
+                if st.button("Exécuter"):
+                    try:
+                        result = tool_data["function"](**tool_args)
+                        st.json(result)
+                    except Exception as e:
+                        st.error(f"Erreur d'exécution: {str(e)}")
+        else:
+            st.warning("Configurez Azure OpenAI dans la sidebar d'abord")
 
 if __name__ == "__main__":
-    initialize()
-    uvicorn.run(app, host=HOST, port=PORT)
+    main()
