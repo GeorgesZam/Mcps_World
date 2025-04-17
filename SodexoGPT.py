@@ -8,9 +8,9 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List
 
-st.set_page_config(page_title="🧑‍💻 All-in-one LLM Plugin Platform", page_icon="💡")
+st.set_page_config(page_title="🧠 Chat LLM + Outils Hybride", page_icon="🤖")
 
-# -------- 1. Initialisation de l'état de session --------
+# -------- 1. Init session --------
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
     st.session_state.history = []
@@ -18,22 +18,21 @@ if "initialized" not in st.session_state:
     st.session_state.cfg = {}
     st.session_state.session_id = f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
-st.title("🛠️ Plateforme LLM+Tools (OpenAI/Azure tool-calling natif)")
+st.title("🧠 LLM + OUTILS (robuste, non-natif)")
 
-# -------- 2. Configuration API LLM --------
+# -------- 2. Choix LLM --------
 if not st.session_state.initialized:
-    st.subheader("Configuration API LLM")
-    provider = st.selectbox("Fournisseur LLM", ["Ollama", "OpenAI", "Azure OpenAI"], index=2)
-    if provider == "Ollama":
-        url = st.text_input("URL Ollama", "http://localhost:11434")
-        st.session_state.cfg = {"provider": "ollama", "url": url}
+    st.subheader("Choix fournisseur LLM")
+    provider = st.selectbox("Fournisseur LLM", ["Démo locale", "OpenAI", "Azure OpenAI"], index=0)
+    if provider == "Démo locale":
+        st.session_state.cfg = {"provider": "demo"}
     elif provider == "OpenAI":
         key = st.text_input("OpenAI API Key", type="password")
         st.session_state.cfg = {"provider": "openai", "key": key}
     else:  # Azure
         ep = st.text_input("Azure Endpoint", value="https://")
         azkey = st.text_input("Azure API Key", type="password")
-        model = st.text_input("Nom du modèle Azure (deployment)", value="gpt-4o-mini")
+        model = st.text_input("Modèle Azure (deployment)", value="gpt-4")
         apiver = st.text_input("API Version", value="2024-03-15-preview")
         st.session_state.cfg = {
             "provider": "azure",
@@ -59,14 +58,12 @@ def load_tools() -> Dict[str,Any]:
             mod = importlib.util.module_from_spec(spec)
             sys.modules[f"tools.{tool_name}"] = mod
             spec.loader.exec_module(mod)
-            schema = getattr(mod, "function_schema", {
-                "type": "object", "properties": {}, "required": [],
-                "name": tool_name, "description": tool_name
-            })
+            matcher = getattr(mod, "matcher", None)
             tool_modules[tool_name] = {
                 "function_call": mod.function_call,
-                "schema": schema,
+                "matcher": matcher,
                 "source": file,
+                "doc": mod.__doc__ or ""
             }
         except Exception as e:
             st.warning(f"Echec import {file} : {e}")
@@ -81,20 +78,20 @@ tools = st.session_state.tools
 # -------- 4. Sidebar tools: upload/suppr/test --------
 st.sidebar.header("🧩 Gestion des Tools")
 with st.sidebar.expander("➕ Ajouter nouveau tool"):
-    uploaded = st.file_uploader("Charger un script tool-xxx.py", type="py")
+    uploaded = st.file_uploader("tool-xxx.py", type="py")
     if uploaded:
         bytes_content = uploaded.read()
         path = os.path.join(TOOLS_FOLDER, uploaded.name)
         with open(path, "wb") as f:
             f.write(bytes_content)
-        st.success(f"Ajouté : {uploaded.name}")
         st.session_state.tools = load_tools()
+        st.success(f"Ajouté : {uploaded.name}")
         st.experimental_rerun()
 
-with st.sidebar.expander("🗑️ Supprimer/un tool"):
+with st.sidebar.expander("🗑️ Supprimer"):
     liste = list(tools.keys())
     if liste:
-        choix = st.selectbox("Sélection pour suppression", options=liste)
+        choix = st.selectbox("Suppression", options=liste)
         if st.button(f"Supprimer {choix}"):
             t = tools[choix]
             os.remove(t["source"])
@@ -106,97 +103,109 @@ with st.sidebar.expander("🗑️ Supprimer/un tool"):
 
 with st.sidebar.expander("📋 Liste & Test outil"):
     for tname, tinfo in tools.items():
-        st.write(f"**{tname}** - {os.path.basename(tinfo['source'])}")
+        st.write(f"**{tname}** - {os.path.basename(tinfo['source'])} - {tinfo.get('doc','')}")
         with st.form(f"test_{tname}"):
             params = {}
-            schema = tinfo["schema"]
-            for pname, pinf in schema.get("properties", {}).items():
-                val = st.text_input(f"{tname} – {pname}: {pinf.get('description','')}")
+            import inspect
+            sig = inspect.signature(tinfo["function_call"])
+            for pname, p in sig.parameters.items():
+                val = st.text_input(f"{tname}:{pname}")
                 params[pname] = val
             if st.form_submit_button("Tester"):
                 try:
                     typed_params = {}
-                    for k, v in params.items():
-                        # auto convert number if possible
-                        try:
-                            if schema["properties"][k]["type"] == "number":
+                    for k,v in params.items():
+                        if v.isdigit():
+                            typed_params[k] = int(v)
+                        else:
+                            try:
                                 typed_params[k] = float(v)
-                            elif schema["properties"][k]["type"] == "integer":
-                                typed_params[k] = int(v)
-                            else:
+                            except Exception:
                                 typed_params[k] = v
-                        except Exception:
-                            typed_params[k] = v
                     result = tinfo["function_call"](**typed_params)
                     st.success(f"Résultat: {result}")
                 except Exception as ex:
                     st.error(str(ex))
 
-# -------- 5. Appel LLM natif tool-calling OpenAI/Azure --------
+# -------- 5. Appel LLM + Tool (par matcher ou clé) --------
+import re
+
+def extract_tool_usages(prompt: str, tools: Dict[str,Any]):
+    found = []
+    for name, tinfo in tools.items():
+        matcher = tinfo.get("matcher", None)
+        if matcher:
+            if callable(matcher) and matcher(prompt):
+                found.append(name)
+            elif isinstance(matcher, str) and matcher in prompt:
+                found.append(name)
+        elif name in prompt:
+            found.append(name)
+    return found
+
 def call_llm(messages: List[Dict], tools: Dict[str, Any]=None) -> Dict:
-    tool_defs = []
-    tool_calls = {}
-    for tname, tinfo in (tools or {}).items():
-        schema = tinfo.get("schema", {})
-        tool_defs.append({
-            "type": "function",  # ← INDISPENSABLE !
-            "name": schema.get("name", tname),
-            "description": schema.get("description", tname),
-            "parameters": {
-                k: v for k, v in schema.items() if k in ("type", "properties", "required")
-            }
-        })
-        tool_calls[schema.get("name",tname)] = tinfo["function_call"]
+    # Chercher une commande outil (simple)
+    last_user = messages[-1]["content"]
+    used_tools = extract_tool_usages(last_user, tools)
+    steps = []
+    tool_results = {}
 
-    config = st.session_state.cfg
-    chat = messages.copy()
-    all_steps = []
-
-    if config["provider"] in ("openai", "azure"):
-        if config["provider"] == "openai":
-            openai.api_key = config["key"]
-            params = {
-                "model": "gpt-4o",
-                "messages": chat,
-                "tools": tool_defs,
-                "tool_choice": "auto"
-            }
-        else:  # Azure
-            openai.api_type = "azure"
-            openai.api_version = config["apiver"]
-            openai.api_key = config["key"]
-            openai.api_base = config["endpoint"]
-            params = {
-                "engine": config["model"],
-                "messages": chat,
-                "tools": tool_defs,
-                "tool_choice": "auto"
-            }
-        need_tool = True
-        content = ""
-        while need_tool:
-            resp = openai.ChatCompletion.create(**params)
-            m = resp["choices"][0]["message"]
-            if m.get("tool_calls"):
-                for call in m["tool_calls"]:
-                    toolname = call["function"]["name"]
-                    args = json.loads(call["function"]["arguments"])
-                    tool_res = tool_calls[toolname](**args)
-                    all_steps.append({"tool": toolname, "args": args, "output": tool_res})
-                    chat.append({
-                        "tool_call_id": call["id"],
-                        "role": "tool",
-                        "name": toolname,
-                        "content": str(tool_res)
-                    })
-                params["messages"] = chat
+    for name in used_tools:
+        tinfo = tools[name]
+        import inspect
+        sig = inspect.signature(tinfo["function_call"])
+        args = {}
+        for pname in sig.parameters:
+            match = re.search(rf"{pname}\s*=\s*([-\w.]+)", last_user)
+            if match:
+                val = match.group(1)
+                # essai autotypage basique
+                try:
+                    val = float(val) if '.' in val else int(val)
+                except:
+                    pass
+                args[pname] = val
             else:
-                need_tool = False
-                content = m["content"]
-        return {"role": "assistant", "content": content, "tools_steps": all_steps}
+                args[pname] = 0  # default, modifiez ou raffinez selon vos tools
+        try:
+            out = tinfo["function_call"](**args)
+        except Exception as ex:
+            out = f"Erreur lors de l'appel du tool: {ex}"
+        steps.append({"tool": name, "args": args, "output": out})
+        tool_results[name] = out
+
+    # Génère la réponse
+    if config["provider"] == "openai":
+        openai.api_key = config["key"]
+        base_prompt = f"L'utilisateur a demandé à utiliser les outils suivants: {steps}. Fournis une réponse cohérente et claire en t'appuyant sur leur résultat."
+        msgs = [{"role": "system", "content": base_prompt}] + messages
+        try:
+            resp = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=msgs
+            )
+            content = resp["choices"][0]["message"]["content"]
+        except Exception as ex:
+            content = f"(Erreur OpenAI: {ex}) - Résultats outils: {tool_results}"
+    elif config["provider"] == "azure":
+        openai.api_type = "azure"
+        openai.api_version = config["apiver"]
+        openai.api_key = config["key"]
+        openai.api_base = config["endpoint"]
+        base_prompt = f"L'utilisateur a demandé à utiliser les outils suivants: {steps}. Fournis une réponse cohérente et claire en t'appuyant sur leur résultat."
+        msgs = [{"role": "system", "content": base_prompt}] + messages
+        try:
+            resp = openai.ChatCompletion.create(
+                engine=config["model"],
+                messages=msgs
+            )
+            content = resp["choices"][0]["message"]["content"]
+        except Exception as ex:
+            content = f"(Erreur Azure: {ex}) - Résultats outils: {tool_results}"
     else:
-        # Ollama/demo fallback
-        return {"role": "assistant", "content": "(Réponse LLM simulée/demo locale)", "tools_steps": []}
+        content = f"(Réponse LLM factice/demo) – Résultats outils : {tool_results}"
+
+    return {"role": "assistant", "content": content, "tools_steps": steps}
 
 # -------- 6. Affichage chat --------
 st.subheader("💬 Conversation")
@@ -204,7 +213,7 @@ for m in st.session_state.history:
     with st.chat_message(m["role"]):
         st.write(m["content"])
         if m.get("tools_steps"):
-            st.write("**Détail outils utilisés :**")
+            st.write("**Détail outils utilisés:**")
             for stp in m["tools_steps"]:
                 st.info(f"> **{stp['tool']}** — Args: `{stp['args']}` — Résultat: `{stp['output']}`")
 
