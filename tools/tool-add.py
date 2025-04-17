@@ -7,7 +7,7 @@ function_schema = {
     "type": "object",
     "properties": {
         "number1": {"type": "number", "description": "Premier nombre"},
-        "number2": {"type": "number", "description": "Second nombre"}
+        "number2": {"type": "number", "description": "Deuxième nombre"}
     },
     "required": ["number1", "number2"],
 }
