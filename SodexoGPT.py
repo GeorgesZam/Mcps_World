@@ -10,7 +10,6 @@ from typing import Dict, List, Any
 # Configuration
 TOOLS_DIR = "tools"
 os.makedirs(TOOLS_DIR, exist_ok=True)
-DEFAULT_MODEL = "gpt-4"
 
 # Template pour le tool temporel
 TIME_TOOL = {
@@ -61,39 +60,29 @@ class ToolManager:
     
     @staticmethod
     def execute_tool(tool_data: Dict[str, Any], **kwargs) -> Any:
-        # Création d'un module dynamique
         spec = importlib.util.spec_from_loader(tool_data['name'], loader=None)
         module = importlib.util.module_from_spec(spec)
-        
-        # Injecte les dépendances requises
         exec("from datetime import datetime\nimport pytz", module.__dict__)
-        
-        # Exécute le code
         exec(tool_data['code'], module.__dict__)
-        
-        # Appel la fonction
         func_name = tool_data['name']
         return module.__dict__[func_name](**kwargs)
 
-# Interface utilisateur
 def main():
-    st.set_page_config(page_title="Azure Tools Chat", layout="wide")
-    st.title("🚀 Azure OpenAI with Tools Integration")
-    
+    st.set_page_config(page_title="Azure AI Tools", layout="wide")
+    st.title("🤖 Azure OpenAI Chat with Tools")
+
     # Initialisation session
     if "conversation" not in st.session_state:
         st.session_state.conversation = []
     
-    # Configuration Azure OpenAI
+    # Configuration Azure
     with st.sidebar:
-        st.header("⚙️ Configuration")
-        openai.api_type = "azure"
-        openai.api_key = st.text_input("Azure OpenAI Key", type="password")
-        openai.api_base = st.text_input("Endpoint", "https://your-resource.openai.azure.com/")
-        openai.api_version = st.text_input("API Version", "2023-07-01-preview")
-        model_name = st.text_input("Model", DEFAULT_MODEL)
-        
-        st.divider()
+        st.header("Azure Configuration")
+        api_type = st.text_input("API Type", "azure", disabled=True)
+        api_key = st.text_input("API Key", type="password")
+        api_base = st.text_input("Endpoint", "https://your-resource.openai.azure.com/")
+        api_version = st.text_input("API Version", "2023-03-15-preview")
+        deployment_name = st.text_input("Deployment", "gpt-4o-mini")
         
         # Gestion des outils
         st.header("🛠️ Tools Manager")
@@ -117,109 +106,65 @@ def main():
                     st.error(f"Error: {str(e)}")
         
         # Création d'un nouveau tool
-        st.divider()
         st.header("🆕 Create Tool")
-        new_tool = st.text_area("Tool JSON Definition", json.dumps(TIME_TOOL, indent=2), height=300)
+        new_tool = st.text_area("Tool JSON", json.dumps(TIME_TOOL, indent=2))
         
-        if st.button("Save Tool"):
+        if st.button("Save New Tool"):
             try:
                 tool_data = json.loads(new_tool)
                 ToolManager.save_tool(tool_data)
                 st.success("Tool saved!")
             except json.JSONDecodeError:
                 st.error("Invalid JSON format")
-    
-    # Interface de chat principale
+
+    # Interface principale
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.header("💬 Chat")
+        st.header("💬 Conversation")
         
-        # Affichage de la conversation
+        # Affichage conversation
         for msg in st.session_state.conversation:
-            with st.chat_message(msg["role"]):
+            role = "assistant" if msg["role"] != "user" else "user"
+            with st.chat_message(role):
                 st.markdown(msg["content"])
-                if msg.get("tool"):
-                    st.caption(f"Tool used: {msg['tool']}")
         
         # Saisie utilisateur
         if prompt := st.chat_input("Type your message..."):
             st.session_state.conversation.append({"role": "user", "content": prompt})
             
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            
-            # Si configuré, appel API
-            if openai.api_key:
+            # Appel API
+            if api_key:
                 try:
-                    # Préparation des messages
-                    messages = [{"role": m["role"], "content": m["content"]} 
-                              for m in st.session_state.conversation]
-                    
-                    # Chargement des tools disponibles
-                    tools = []
-                    for tool_file in ToolManager.list_tools():
-                        tool_data = ToolManager.load_tool(tool_file)
-                        tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": tool_data["name"],
-                                "description": tool_data["description"],
-                                "parameters": tool_data["parameters"]
-                            }
-                        })
-                    
+                    # Configuration OpenAI
+                    openai.api_type = api_type
+                    openai.api_base = api_base
+                    openai.api_version = api_version
+                    openai.api_key = api_key
+
                     # Appel Azure OpenAI
                     response = openai.ChatCompletion.create(
-                        engine=model_name,
-                        messages=messages,
-                        tools=tools,
-                        tool_choice="auto"
+                        engine=deployment_name,
+                        messages=st.session_state.conversation,
+                        max_tokens=300
                     )
                     
-                    # Traitement de la réponse
-                    assistant_message = response.choices[0].message
-                    st.session_state.conversation.append({
-                        "role": "assistant",
-                        "content": assistant_message.content or ""
-                    })
-                    
-                    # Si tool appelé
-                    if tool_calls := assistant_message.tool_calls:
-                        for tool_call in tool_calls:
-                            tool_name = tool_call.function.name
-                            try:
-                                tool_data = next(
-                                    ToolManager.load_tool(f"{t}.json") 
-                                    for t in ToolManager.list_tools() 
-                                    if t.startswith(tool_name)
-                                )
-                                
-                                args = json.loads(tool_call.function.arguments)
-                                result = ToolManager.execute_tool(tool_data, **args)
-                                
-                                st.session_state.conversation.append({
-                                    "role": "tool",
-                                    "name": tool_name,
-                                    "content": f"Result: {result}",
-                                    "tool": tool_name
-                                })
-                                
-                            except Exception as e:
-                                st.error(f"Tool error: {str(e)}")
-                
-                except openai.error.AuthenticationError:
-                    st.error("Invalid Azure OpenAI credentials")
+                    # Traitement réponse
+                    if response.choices:
+                        assistant_message = response.choices[0].message
+                        st.session_state.conversation.append({
+                            "role": "assistant",
+                            "content": assistant_message.content
+                        })
                 except Exception as e:
-                    st.error(f"API error: {str(e)}")
+                    st.error(f"API Error: {str(e)}")
     
     with col2:
         st.header("🧰 Available Tools")
         for tool_file in ToolManager.list_tools():
-            with st.expander(f"🔧 {tool_file.replace('.json', '')}"):
+            with st.expander(tool_file.replace('.json', '')):
                 tool_data = ToolManager.load_tool(tool_file)
-                st.caption(tool_data['description'])
-                st.json(tool_data['parameters'], expanded=False)
+                st.json(tool_data, expanded=False)
 
 if __name__ == "__main__":
     main()
