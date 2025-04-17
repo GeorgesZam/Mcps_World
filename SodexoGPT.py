@@ -1,3 +1,4 @@
+# --- Fichier unique : app.py ---
 import streamlit as st
 import importlib.util
 import os
@@ -7,10 +8,9 @@ from datetime import datetime
 from typing import Any, Dict, List
 import openai
 
-# --- CONFIG SECTION ---
 st.set_page_config(page_title="🧑‍💻 All-in-one LLM Plugin Platform", page_icon="💡")
 
-# ---- 1. CONFIGURATION INIT (API KEY & MODEL CHOICE) ----
+# ---- 1. Initialisation session state ----
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
     st.session_state.history = []
@@ -20,6 +20,7 @@ if "initialized" not in st.session_state:
 
 st.title("🛠️ Plateforme LLM+Tools (All-In-One, 100% Streamlit)")
 
+# ---- 2. Config API LLM (ne s'affiche qu'au lancement ou reset)
 if not st.session_state.initialized:
     st.subheader("Configuration API LLM")
     provider = st.selectbox("Fournisseur LLM", ["Ollama", "OpenAI", "Azure OpenAI"], index=2)
@@ -29,7 +30,7 @@ if not st.session_state.initialized:
     elif provider == "OpenAI":
         key = st.text_input("OpenAI API Key", type="password")
         st.session_state.cfg = {"provider": "openai", "key": key}
-    else:
+    else:  # Azure
         ep = st.text_input("Azure Endpoint", value="https://...")
         azkey = st.text_input("Azure API Key", type="password")
         model = st.text_input("Nom du modèle Azure", value="gpt-4o-mini")
@@ -38,17 +39,16 @@ if not st.session_state.initialized:
             "provider": "azure",
             "endpoint": ep, "key": azkey, "model": model, "apiver": apiver
         }
-if st.button("Valider et démarrer"):
-    st.session_state.initialized = True
-    st.rerun()
-else:
+    if st.button("Valider et démarrer"):
+        st.session_state.initialized = True
+        st.rerun()
     st.stop()
+
 config = st.session_state.cfg
 
-# ---- 2. LOADING TOOLS FROM tools/ ----
+# ---- 3. Gestion autonome tools/ ----
 TOOLS_FOLDER = "tools"
 os.makedirs(TOOLS_FOLDER, exist_ok=True)
-
 def load_tools() -> Dict[str,Any]:
     tool_modules = {}
     for file in glob.glob(os.path.join(TOOLS_FOLDER, "tool-*.py")):
@@ -71,15 +71,12 @@ def load_tools() -> Dict[str,Any]:
 
 if st.button("🔁 Recharger Tools"):
     st.session_state.tools = load_tools()
-else:
-    if not st.session_state.tools:
-        st.session_state.tools = load_tools()
-
+elif not st.session_state.tools:
+    st.session_state.tools = load_tools()
 tools = st.session_state.tools
 
-# --- 3. Tools management UI
+# ---- 4. Sidebar tools admin : upload, suppression, test ----
 st.sidebar.header("🧩 Gestion des Tools")
-st.sidebar.markdown("Placez vos scripts Python dans `tools/tool-*.py`. Le nom du module sera utilisé comme nom d’outil.")
 
 with st.sidebar.expander("➕ Ajouter nouveau tool"):
     uploaded = st.file_uploader("Charger un script tool-xxx.py", type="py")
@@ -90,15 +87,20 @@ with st.sidebar.expander("➕ Ajouter nouveau tool"):
             f.write(bytes_content)
         st.success(f"Ajouté : {uploaded.name}")
         st.session_state.tools = load_tools()
+        st.experimental_rerun()
 
 with st.sidebar.expander("🗑️ Supprimer/un tool"):
-    choix = st.selectbox("Sélection pour suppression", options=list(tools.keys()))
-    if st.button(f"Supprimer {choix}"):
-        t = tools[choix]
-        os.remove(t["source"])
-        del st.session_state.tools[choix]
-        st.success(f"{choix} supprimé.")
-        st.experimental_rerun()
+    liste = list(tools.keys())
+    if liste:
+        choix = st.selectbox("Sélection pour suppression", options=liste)
+        if st.button(f"Supprimer {choix}"):
+            t = tools[choix]
+            os.remove(t["source"])
+            del st.session_state.tools[choix]
+            st.success(f"{choix} supprimé.")
+            st.experimental_rerun()
+    else:
+        st.info("Aucun tool chargé.")
 
 with st.sidebar.expander("📋 Liste & Test outil"):
     for tname, tinfo in tools.items():
@@ -115,14 +117,10 @@ with st.sidebar.expander("📋 Liste & Test outil"):
                 except Exception as ex:
                     st.error(str(ex))
 
-# --- 4. Chat + LLM Section
-
-# Préparer le LLM API client selon le provider choisi
+# ---- 5. Chatbot LLM & tools (basique ou LLM API direct)
 def call_llm(messages: List[Dict], tools: Dict[str,Any]=None) -> Dict:
-    # Pour démo : le LLM propose "appelle tool-X si question correspond"
-    # Ici, on le simule avec quelques if, mais tu peux brancher OpenAI/others plus tard
     last = messages[-1]["content"].lower()
-    # Simulation : si question contient "additionne", "somme", "heure", etc.
+    # Demo : routing plugin/tool automatique (remplace par vrai call OpenAI Tool-calling si tu veux)
     if "heure" in last and "time" in tools:
         rep = tools["time"]["function_call"]()
         return {"role":"assistant","content":f"[TOOL time] {rep}","tools_used":["time"]}
@@ -132,7 +130,7 @@ def call_llm(messages: List[Dict], tools: Dict[str,Any]=None) -> Dict:
         n1, n2 = map(float, nums[:2]) if len(nums)>=2 else (0,0)
         rep = tools["add"]["function_call"](n1, n2)
         return {"role":"assistant","content":f"[TOOL add] {n1} + {n2} = {rep}","tools_used":["add"]}
-    # Sinon réponse LLM API vraie si OpenAI/Azure sélectionné
+    # Sinon call direct LLM
     if config["provider"]=="openai":
         openai.api_key = config["key"]
         resp = openai.ChatCompletion.create(
@@ -149,6 +147,7 @@ def call_llm(messages: List[Dict], tools: Dict[str,Any]=None) -> Dict:
             messages=messages
         )
         return {"role":"assistant","content": resp["choices"][0]["message"]["content"],"tools_used":[]}
+    # Démo locale sinon
     return {"role":"assistant", "content":"(Réponse LLM simulée - demo locale)", "tools_used":[]}
 
 st.subheader("💬 Conversation")
@@ -166,5 +165,3 @@ if prompt := st.chat_input("Votre message..."):
             st.write(reponse["content"])
             if reponse.get("tools_used"):
                 st.info(f"Tools appelés: {', '.join(reponse['tools_used'])}")
-
-# END
