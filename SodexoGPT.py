@@ -32,8 +32,8 @@ if not st.session_state.initialized:
     else:  # Azure
         ep = st.text_input("Azure Endpoint", value="https://")
         azkey = st.text_input("Azure API Key", type="password")
-        model = st.text_input("Modèle Azure (deployment)", value="gpt-4")
-        apiver = st.text_input("API Version", value="2024-03-15-preview")
+        model = st.text_input("Modèle Azure (deployment)", value="")
+        apiver = st.text_input("API Version", value="")
         st.session_state.cfg = {
             "provider": "azure",
             "endpoint": ep, "key": azkey, "model": model, "apiver": apiver
