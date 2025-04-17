@@ -38,11 +38,11 @@ if not st.session_state.initialized:
             "provider": "azure",
             "endpoint": ep, "key": azkey, "model": model, "apiver": apiver
         }
-    if st.button("Valider et démarrer"):
-        st.session_state.initialized = True
-        st.experimental_rerun()
+if st.button("Valider et démarrer"):
+    st.session_state.initialized = True
+    st.experimental_rerun()
+else:
     st.stop()
-
 config = st.session_state.cfg
 
 # ---- 2. LOADING TOOLS FROM tools/ ----
