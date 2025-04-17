@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from typing import Any, Dict, List
 import openai
+import re
 
 st.set_page_config(page_title="🧑‍💻 All-in-one LLM Plugin Platform", page_icon="💡")
 
@@ -19,7 +20,7 @@ if "initialized" not in st.session_state:
 
 st.title("🛠️ Plateforme LLM+Tools (All-In-One, 100% Streamlit)")
 
-# ---- 2. Config API LLM (ne s'affiche qu'au lancement ou reset)
+# ---- 2. Config API LLM ----
 if not st.session_state.initialized:
     st.subheader("Configuration API LLM")
     provider = st.selectbox("Fournisseur LLM", ["Ollama", "OpenAI", "Azure OpenAI"], index=2)
@@ -45,9 +46,10 @@ if not st.session_state.initialized:
 
 config = st.session_state.cfg
 
-# ---- 3. Gestion autonome tools/ ----
+# ---- 3. Gestion tools/ dynamiques ----
 TOOLS_FOLDER = "tools"
 os.makedirs(TOOLS_FOLDER, exist_ok=True)
+
 def load_tools() -> Dict[str,Any]:
     tool_modules = {}
     for file in glob.glob(os.path.join(TOOLS_FOLDER, "tool-*.py")):
@@ -57,11 +59,15 @@ def load_tools() -> Dict[str,Any]:
             mod = importlib.util.module_from_spec(spec)
             sys.modules[f"tools.{tool_name}"] = mod
             spec.loader.exec_module(mod)
+            # Fallback triggers: nom du tool seul si rien de défini
+            schema = getattr(mod, "function_schema", {
+                "type": "object", "properties": {}, "required": []
+            })
+            if not schema.get("triggers"):
+                schema["triggers"] = [tool_name]
             tool_modules[tool_name] = {
                 "function_call": mod.function_call,
-                "schema": getattr(mod, "function_schema", {
-                    "type": "object", "properties": {}, "required": []
-                }),
+                "schema": schema,
                 "source": file,
             }
         except Exception as e:
@@ -74,7 +80,7 @@ elif not st.session_state.tools:
     st.session_state.tools = load_tools()
 tools = st.session_state.tools
 
-# ---- 4. Sidebar tools admin : upload, suppression, test ----
+# ---- 4. Sidebar tools: load/upload/suppr/test/debug triggers ----
 st.sidebar.header("🧩 Gestion des Tools")
 
 with st.sidebar.expander("➕ Ajouter nouveau tool"):
@@ -104,6 +110,7 @@ with st.sidebar.expander("🗑️ Supprimer/un tool"):
 with st.sidebar.expander("📋 Liste & Test outil"):
     for tname, tinfo in tools.items():
         st.write(f"**{tname}** - {os.path.basename(tinfo['source'])}")
+        st.write(f"⚡ **Triggers**: {', '.join(map(str, tinfo['schema'].get('triggers',[])))}")
         with st.form(f"test_{tname}"):
             params = {}
             for pname, pinf in tinfo["schema"].get("properties", {}).items():
@@ -116,40 +123,42 @@ with st.sidebar.expander("📋 Liste & Test outil"):
                 except Exception as ex:
                     st.error(str(ex))
 
-# ---- 5. Nouvelle version du call_llm, multi tools et LLM contexte explication ----
+# ---- 5. Appel LLM + outils + triggers dynamiques ----
 def call_llm(messages: List[Dict], tools: Dict[str,Any]=None) -> Dict:
     last = messages[-1]["content"].lower()
     steps = []
     tool_results = {}
-
-    import re
     if tools:
-        # Heure
-        if "heure" in last and "time" in tools:
-            out = tools["time"]["function_call"]()
-            steps.append({"tool":"time","args":{},"output": out})
-            tool_results['time'] = out
+        for tname, tinfo in tools.items():
+            schema = tinfo.get('schema', {})
+            triggers = schema.get("triggers", [tname])
 
-        # Addition
-        if "add" in tools and (("additionne" in last) or ("somme" in last) or ("add" in last)):
-            nums = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", last)
-            if len(nums)>=2:
-                n1, n2 = map(float, nums[:2])
-                res = tools["add"]["function_call"](n1, n2)
-                steps.append({"tool":"add","args":{"number1":n1,"number2":n2},"output":res})
-                tool_results['add'] = res
-        
-        # Nombre secret
-        if ("nombre secret" in last or "secret" in last) and "secret" in tools:
-            out = tools["secret"]["function_call"]()
-            steps.append({"tool":"secret","args":{},"output": out})
-            tool_results['secret'] = out
+            # Matching par simple inclusion
+            trig_found = any(trig.lower() in last for trig in triggers)
 
-    # --- Génération explicative multi-tool (LLM a tout le contexte) ---
+            # Option: trigger par regex aussi
+            triggers_regex = schema.get("triggers_regex", [])
+            regex_found = any(re.search(rgx, last) for rgx in triggers_regex)
+
+            if trig_found or regex_found:
+                # Addition spéciale
+                if tname == "add":
+                    nums = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", last)
+                    if len(nums)>=2:
+                        n1, n2 = map(float, nums[:2])
+                        out = tinfo["function_call"](n1, n2)
+                        steps.append({"tool":tname,"args":{"number1":n1,"number2":n2},"output": out})
+                        tool_results[tname] = out
+                else:
+                    out = tinfo["function_call"]()
+                    steps.append({"tool":tname,"args":{},"output":out})
+                    tool_results[tname] = out
+
+    # --- Génération explicative multi-tool ---
     if steps:
         system_instructions = (
             "Voici les résultats de fonctions/outils spécialisés appelés pour cette question. "
-            "Utilise-les pour composer ta réponse de façon détaillée, claire, concise et polie.\n"
+            "Utilise-les pour composer ta réponse de façon claire, concise et polie.\n"
         )
         for stp in steps:
             system_instructions += f"[TOOL {stp['tool']}] Résultat: {stp['output']} (args={stp['args']})\n"
