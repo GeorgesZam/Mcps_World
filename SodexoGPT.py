@@ -120,33 +120,55 @@ with st.sidebar.expander("📋 Liste & Test outil"):
 # ---- 5. Chatbot LLM & tools (basique ou LLM API direct)
 def call_llm(messages: List[Dict], tools: Dict[str,Any]=None) -> Dict:
     last = messages[-1]["content"].lower()
-    # Demo : routing plugin/tool automatique (remplace par vrai call OpenAI Tool-calling si tu veux)
-    if "heure" in last and "time" in tools:
-        rep = tools["time"]["function_call"]()
-        return {"role":"assistant","content":f"[TOOL time] {rep}","tools_used":["time"]}
-    if ("additionne" in last or "somme" in last or "add" in last) and "add" in tools:
+    steps = []
+    content = ""
+    # Multi-tool: on boucle sur les tools chargés et leur pattern "simple"
+    # (à rendre plus élaboré avec du NLP si besoin !)
+    if tools:
+        # ici tu peux expliciter le mapping pattern <-> tool name
+        if "heure" in last and "time" in tools:
+            out = tools["time"]["function_call"]()
+            steps.append({"tool":"time","args":{},"output": out})
+            content += f"\n[TOOL time] {out}"
+
+        # Addition demo (add tool) -- on boucle pour chaque addition trouvée
         import re
-        nums = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", last)
-        n1, n2 = map(float, nums[:2]) if len(nums)>=2 else (0,0)
-        rep = tools["add"]["function_call"](n1, n2)
-        return {"role":"assistant","content":f"[TOOL add] {n1} + {n2} = {rep}","tools_used":["add"]}
-    # Sinon call direct LLM
-    if config["provider"]=="openai":
-        openai.api_key = config["key"]
-        resp = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo", messages=messages
-        )
-        return {"role":"assistant","content": resp["choices"][0]["message"]["content"],"tools_used":[]}
-    elif config["provider"]=="azure":
-        openai.api_type = "azure"
-        openai.api_version = config["apiver"]
-        openai.api_key = config["key"]
-        openai.api_base = config["endpoint"]
-        resp = openai.ChatCompletion.create(
-            engine=config["model"],
-            messages=messages
-        )
-        return {"role":"assistant","content": resp["choices"][0]["message"]["content"],"tools_used":[]}
+        if "add" in tools and (("additionne" in last) or ("somme" in last) or ("add" in last)):
+            nums = re.findall(r"[-+]?\d*\.\d+|[-+]?\d+", last)
+            # multi-add si plusieurs paires de noms (option bonus)
+            if len(nums)>=2:
+                n1, n2 = map(float, nums[:2])
+                res = tools["add"]["function_call"](n1, n2)
+                steps.append({"tool":"add","args":{"number1":n1,"number2":n2},"output":res})
+                content += f"\n[TOOL add] {n1} + {n2} = {res}"
+
+    # Ajoute d’autres patterns/tools ici !
+
+    if not steps:
+        # réutilisation code d'avant : mode LLM seul
+        content = "(Réponse LLM seule, aucun outil requis)\n"
+        if config["provider"]=="openai":
+            openai.api_key = config["key"]
+            resp = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo", messages=messages
+            )
+            content += resp["choices"][0]["message"]["content"]
+        elif config["provider"]=="azure":
+            openai.api_type = "azure"
+            openai.api_version = config["apiver"]
+            openai.api_key = config["key"]
+            openai.api_base = config["endpoint"]
+            resp = openai.ChatCompletion.create(
+                engine=config["model"], messages=messages
+            )
+            content += resp["choices"][0]["message"]["content"]
+        else:
+            content += "Demo: réponse LLM simulée."
+    else:
+        # Compose une réponse finale à partir des outils (option avancée : passer à LLM les étapes tool+user)
+        content += "\nRéponse basée sur les outils utilisés."
+    return {"role":"assistant", "content":content, "tools_steps":steps}
+
     # Démo locale sinon
     return {"role":"assistant", "content":"(Réponse LLM simulée - demo locale)", "tools_used":[]}
 
