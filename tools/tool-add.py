@@ -1,24 +1,13 @@
-# tools/tool-add.py
-
 def function_call(a: float, b: float) -> float:
-    """
-    Additionne deux nombres.
-    """
     return a + b
 
 function_schema = {
-    "name": "addition",
-    "description": "Additionne deux nombres a et b.",
+    "name": "add",
+    "description": "Addition de 2 nombres",
     "type": "object",
     "properties": {
-        "a": {
-            "type": "number",
-            "description": "Premier nombre à additionner"
-        },
-        "b": {
-            "type": "number",
-            "description": "Deuxième nombre à additionner"
-        }
+        "a": {"type": "number", "description": "Nombre 1"},
+        "b": {"type": "number", "description": "Nombre 2"},
     },
     "required": ["a", "b"]
 }
