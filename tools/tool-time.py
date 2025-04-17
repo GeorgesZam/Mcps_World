@@ -1,8 +1,9 @@
-## tool/tool-time.py
-from datetime import datetime
-
-
+function_schema = {
+    "type": "object",
+    "properties": {},
+    "required": []
+}
 def function_call():
-    """Return the actual time"""
+    from datetime import datetime
     now = datetime.now()
     return now.strftime("Il est %H:%M:%S")
