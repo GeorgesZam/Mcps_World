@@ -40,7 +40,7 @@ if not st.session_state.initialized:
         }
 if st.button("Valider et démarrer"):
     st.session_state.initialized = True
-    st.experimental_rerun()
+    st.rerun()
 else:
     st.stop()
 config = st.session_state.cfg
