@@ -1,273 +1,157 @@
 import streamlit as st
 import os
-import json
 import importlib.util
-import shutil
-from pathlib import Path
+import json
+import inspect
 import openai
-import base64
+from datetime import datetime
+import pytz
 
-# Configuration de l'application
-st.set_page_config(page_title="Local Tools Manager for Azure OpenAI", layout="wide")
-
-# Variables globales
+# Configuration
 TOOLS_DIR = "tools"
-ARCHIVE_DIR = "tools_archive"
-TOOL_TEMPLATE = """# Tool Template
-def run(model, openai, **kwargs):
-    \"\"\"
-    Exemple de fonction principale du tool
-    
-    Args:
-        model (str): Nom du modèle Azure OpenAI
-        openai: Module OpenAI configuré
-        **kwargs: Arguments supplémentaires spécifiques au tool
-        
-    Returns:
-        Résultat de l'exécution du tool
-    \"\"\"
-    try:
-        # Exemple d'appel à l'API OpenAI
-        response = openai.ChatCompletion.create(
-            engine=model,
-            messages=[{"role": "user", "content": "Bonjour, qui es-tu?"}]
-        )
-        return response.choices[0].message['content']
-    except Exception as e:
-        return {"error": str(e)}
-"""
+os.makedirs(TOOLS_DIR, exist_ok=True)
 
-# Créer les répertoires s'ils n'existent pas
-Path(TOOLS_DIR).mkdir(exist_ok=True)
-Path(ARCHIVE_DIR).mkdir(exist_ok=True)
+# Template pour nouveaux tools
+TIME_TOOL_TEMPLATE = '''{
+    "name": "get_current_time",
+    "description": "Get the current time in a specific timezone",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "timezone": {
+                "type": "string",
+                "description": "Timezone like Europe/Paris, America/New_York etc.",
+                "default": "local"
+            },
+            "format": {
+                "type": "string",
+                "description": "Time format string",
+                "default": "%Y-%m-%d %H:%M:%S"
+            }
+        }
+    },
+    "function": "def get_current_time(timezone='local', format='%Y-%m-%d %H:%M:%S'):\n    if timezone == 'local':\n        current_time = datetime.now()\n    else:\n        tz = pytz.timezone(timezone)\n        current_time = datetime.now(tz)\n    return {\n        'time': current_time.strftime(format),\n        'timezone': timezone if timezone != 'local' else 'local time',\n        'timestamp': current_time.timestamp()\n    }"
+}'''
 
-# Fonction utilitaire pour charger un tool
-def load_tool(tool_name):
-    tool_path = os.path.join(TOOLS_DIR, tool_name, "tool.py")
-    if not os.path.exists(tool_path):
-        return None
+# Charger un tool depuis un fichier
+def load_tool(tool_path):
+    with open(tool_path, 'r') as f:
+        tool_data = json.load(f)
     
-    spec = importlib.util.spec_from_file_location(f"{tool_name}.tool", tool_path)
+    # Créer un module dynamique
+    module_name = os.path.splitext(os.path.basename(tool_path))[0]
+    spec = importlib.util.spec_from_loader(module_name, loader=None)
     tool_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tool_module)
+    
+    # Ajouter les imports nécessaires
+    exec("from datetime import datetime\nimport pytz", tool_module.__dict__)
+    
+    # Exécuter la fonction dans le module
+    exec(tool_data["function"], tool_module.__dict__)
+    
+    # Stocker le schéma
+    tool_module.schema = {
+        "name": tool_data["name"],
+        "description": tool_data["description"],
+        "parameters": tool_data["parameters"]
+    }
+    
     return tool_module
 
-# Fonction pour lister les tools disponibles
-def list_tools():
-    tools = []
-    for item in os.listdir(TOOLS_DIR):
-        tool_dir = os.path.join(TOOLS_DIR, item)
-        if os.path.isdir(tool_dir) and os.path.exists(os.path.join(tool_dir, "tool.py")):
-            # Lire les métadonnées si elles existent
-            meta_path = os.path.join(tool_dir, "meta.json")
-            metadata = {"name": item, "description": "Aucune description disponible"}
-            if os.path.exists(meta_path):
-                with open(meta_path, "r") as f:
-                    metadata.update(json.load(f))
-            tools.append(metadata)
-    return sorted(tools, key=lambda x: x["name"])
-
-# Fonction pour sauvegarder un tool
-def save_tool(tool_name, tool_code, description="", author=""):
-    tool_dir = os.path.join(TOOLS_DIR, tool_name)
-    os.makedirs(tool_dir, exist_ok=True)
+# Interface Streamlit
+def main():
+    st.title("🔧 Tools Manager with OpenAI Function Calling")
     
-    # Sauvegarder le code
-    with open(os.path.join(tool_dir, "tool.py"), "w") as f:
-        f.write(tool_code)
-    
-    # Sauvegarder les métadonnées
-    metadata = {
-        "name": tool_name,
-        "description": description,
-        "author": author,
-        "version": "1.0.0"
-    }
-    with open(os.path.join(tool_dir, "meta.json"), "w") as f:
-        json.dump(metadata, f)
-    
-    return True
-
-# Fonction pour exporter un tool
-def export_tool(tool_name):
-    tool_dir = os.path.join(TOOLS_DIR, tool_name)
-    if not os.path.exists(tool_dir):
-        return None
-    
-    # Créer un zip du tool
-    archive_path = os.path.join(ARCHIVE_DIR, f"{tool_name}.zip")
-    shutil.make_archive(os.path.join(ARCHIVE_DIR, tool_name), 'zip', tool_dir)
-    
-    # Lire le fichier zip
-    with open(archive_path, "rb") as f:
-        zip_data = f.read()
-    
-    return zip_data
-
-# Fonction pour importer un tool
-def import_tool(uploaded_file):
-    try:
-        # Extraire le nom du fichier sans extension
-        tool_name = os.path.splitext(uploaded_file.name)[0]
-        tool_dir = os.path.join(TOOLS_DIR, tool_name)
+    # Configuration OpenAI
+    with st.expander("⚙️ OpenAI Configuration"):
+        api_key = st.text_input("API Key", type="password")
+        endpoint = st.text_input("Endpoint URL", "https://your-resource.openai.azure.com/")
+        api_version = st.text_input("API Version", "2023-07-01-preview")
+        deployment = st.text_input("Deployment Name", "gpt-4")
         
-        # Créer un répertoire temporaire
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Sauvegarder le fichier uploadé
-            temp_path = os.path.join(temp_dir, uploaded_file.name)
-            with open(temp_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            
-            # Extraire le zip
-            shutil.unpack_archive(temp_path, tool_dir)
-        
-        return True, tool_name
-    except Exception as e:
-        return False, str(e)
-
-# Initialisation de la session
-if 'openai_config' not in st.session_state:
-    st.session_state.openai_config = {
-        'api_key': '',
-        'api_base': '',
-        'api_version': '2023-05-15',
-        'model': 'gpt-35-turbo'
-    }
-
-# Interface principale
-st.title("Local Tools Manager for Azure OpenAI")
-
-# Configuration OpenAI
-with st.sidebar:
-    st.header("Configuration OpenAI Azure")
-    st.session_state.openai_config['api_key'] = st.text_input("Clé API", st.session_state.openai_config['api_key'], type="password")
-    st.session_state.openai_config['api_base'] = st.text_input("Endpoint", st.session_state.openai_config['api_base'])
-    st.session_state.openai_config['api_version'] = st.text_input("Version API", st.session_state.openai_config['api_version'])
-    st.session_state.openai_config['model'] = st.text_input("Modèle", st.session_state.openai_config['model'])
-
-# Gestion des tools
-tab1, tab2, tab3 = st.tabs(["Utiliser des Tools", "Gérer les Tools", "Créer un Tool"])
-
-with tab1:
-    st.header("Utiliser des Tools")
-    available_tools = list_tools()
-    
-    if not available_tools:
-        st.warning("Aucun tool disponible. Veuillez en créer ou en importer.")
-    else:
-        selected_tool = st.selectbox(
-            "Choisir un tool", 
-            available_tools,
-            format_func=lambda x: f"{x['name']} - {x['description']}"
-        )
-        
-        tool_module = load_tool(selected_tool["name"])
-        
-        if tool_module:
-            # Afficher la description détaillée
-            st.markdown(f"**Description:** {selected_tool.get('description', 'Aucune description disponible')}")
-            if selected_tool.get('author'):
-                st.markdown(f"**Auteur:** {selected_tool['author']}")
-            if selected_tool.get('version'):
-                st.markdown(f"**Version:** {selected_tool['version']}")
-            
-            # Configurer OpenAI avec les paramètres de l'utilisateur
+        if api_key:
             openai.api_type = "azure"
-            openai.api_key = st.session_state.openai_config['api_key']
-            openai.api_base = st.session_state.openai_config['api_base']
-            openai.api_version = st.session_state.openai_config['api_version']
-            
-            # Section pour les paramètres spécifiques au tool
-            st.subheader("Paramètres d'exécution")
-            user_input = st.text_area("Entrée utilisateur", "Bonjour, qui es-tu?")
-            
-            # Appel du tool
-            if st.button("Exécuter le Tool"):
-                try:
-                    result = tool_module.run(
-                        model=st.session_state.openai_config['model'],
-                        openai=openai,
-                        user_input=user_input
-                    )
-                    st.success("Tool exécuté avec succès!")
-                    st.json(result)
-                except Exception as e:
-                    st.error(f"Erreur lors de l'exécution du tool: {str(e)}")
-
-with tab2:
-    st.header("Gérer les Tools")
+            openai.api_key = api_key
+            openai.api_base = endpoint
+            openai.api_version = api_version
     
-    # Sous-onglets pour la gestion
-    subtab1, subtab2 = st.tabs(["Exporter un Tool", "Importer un Tool"])
-    
-    with subtab1:
-        st.subheader("Exporter un Tool")
-        available_tools = list_tools()
-        
-        if not available_tools:
-            st.warning("Aucun tool disponible pour l'export.")
-        else:
-            tool_to_export = st.selectbox(
-                "Choisir un tool à exporter", 
-                available_tools,
-                format_func=lambda x: x['name']
-            )
-            
-            if st.button("Exporter le Tool"):
-                zip_data = export_tool(tool_to_export["name"])
-                if zip_data:
-                    # Créer un bouton de téléchargement
-                    b64 = base64.b64encode(zip_data).decode()
-                    href = f'<a href="data:application/zip;base64,{b64}" download="{tool_to_export["name"]}.zip">Télécharger {tool_to_export["name"]}.zip</a>'
-                    st.markdown(href, unsafe_allow_html=True)
-                else:
-                    st.error("Erreur lors de l'export du tool")
-    
-    with subtab2:
-        st.subheader("Importer un Tool")
-        uploaded_file = st.file_uploader(
-            "Choisir un fichier ZIP de tool", 
-            type="zip",
-            accept_multiple_files=False
-        )
-        
-        if uploaded_file and st.button("Importer le Tool"):
-            success, result = import_tool(uploaded_file)
-            if success:
-                st.success(f"Tool {result} importé avec succès!")
-                st.experimental_rerun()  # Rafraîchir la liste des tools
-            else:
-                st.error(f"Erreur lors de l'import: {result}")
-
-with tab3:
-    st.header("Créer un nouveau Tool")
+    # Liste des tools disponibles
+    tools = [f for f in os.listdir(TOOLS_DIR) if f.endswith('.py')]
     
     col1, col2 = st.columns(2)
     
     with col1:
-        new_tool_name = st.text_input("Nom du tool*")
-        new_tool_author = st.text_input("Auteur")
-        new_tool_description = st.text_area("Description")
+        st.subheader("🛠️ Available Tools")
+        selected_tool = st.selectbox("Choose a tool", tools)
+        
+        if selected_tool:
+            tool_path = os.path.join(TOOLS_DIR, selected_tool)
+            tool_module = load_tool(tool_path)
+            
+            st.json(tool_module.schema, expanded=False)
+            
+            if "function" in tool_module.__dict__:
+                st.code(inspect.getsource(tool_module.__dict__["get_current_time"] if "get_current_time" in tool_module.__dict__ else tool_module.__dict__[list(tool_module.__dict__.keys())[-1]]))
     
     with col2:
-        new_tool_code = st.text_area(
-            "Code Python*", 
-            height=400, 
-            value=TOOL_TEMPLATE,
-            help="Doit contenir une fonction 'run(model, openai, **kwargs)'"
-        )
+        st.subheader("🚀 Execute Tool")
+        
+        if selected_tool and api_key:
+            try:
+                tool_module = load_tool(os.path.join(TOOLS_DIR, selected_tool))
+                
+                # Créer l'interface dynamique basée sur le schéma
+                params = tool_module.schema["parameters"]["properties"]
+                kwargs = {}
+                
+                for param, props in params.items():
+                    if props.get("type") == "string":
+                        kwargs[param] = st.text_input(param, value=props.get("default", ""))
+                    # Ajouter d'autres types au besoin...
+                
+                if st.button("Execute"):
+                    func_name = [k for k in tool_module.__dict__.keys() if not k.startswith('_')][0]
+                    result = tool_module.__dict__[func_name](**kwargs)
+                    
+                    st.subheader("Results")
+                    st.json(result)
+                    
+                    # Appel via OpenAI function calling
+                    messages = [
+                        {"role": "user", "content": f"What's the current time in {kwargs.get('timezone', 'local')}?"}
+                    ]
+                    
+                    response = openai.ChatCompletion.create(
+                        engine=deployment,
+                        messages=messages,
+                        functions=[tool_module.schema],
+                        function_call={"name": tool_module.schema["name"]}
+                    )
+                    
+                    st.subheader("OpenAI Function Calling")
+                    st.json(response.choices[0].message)
+            
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
     
-    if st.button("Enregistrer le Tool"):
-        if new_tool_name and new_tool_code:
-            if save_tool(
-                new_tool_name,
-                new_tool_code,
-                new_tool_description,
-                new_tool_author
-            ):
-                st.success(f"Tool {new_tool_name} créé avec succès!")
-                st.experimental_rerun()  # Rafraîchir la liste des tools
+    # Créer un nouveau tool
+    with st.expander("🆕 Create New Tool"):
+        new_tool_name = st.text_input("Tool Filename (must end with .py)")
+        new_tool_code = st.text_area("Tool JSON Definition", value=TIME_TOOL_TEMPLATE, height=300)
+        
+        if st.button("Save Tool"):
+            if new_tool_name and new_tool_name.endswith('.py'):
+                try:
+                    json.loads(new_tool_code)  # Validation JSON
+                    
+                    with open(os.path.join(TOOLS_DIR, new_tool_name), 'w') as f:
+                        f.write(new_tool_code)
+                    
+                    st.success("Tool saved successfully!")
+                except json.JSONDecodeError:
+                    st.error("Invalid JSON format")
             else:
-                st.error("Erreur lors de la création du tool")
-        else:
-            st.warning("Veuillez remplir au moins le nom et le code du tool (champs marqués d'un *)")
+                st.error("Filename must end with .py")
+
+if __name__ == "__main__":
+    main()
