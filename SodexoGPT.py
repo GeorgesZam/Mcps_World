@@ -139,14 +139,15 @@ def call_llm(messages: List[Dict], tools: Dict[str, Any]=None) -> Dict:
     for tname, tinfo in (tools or {}).items():
         schema = tinfo.get("schema", {})
         tool_defs.append({
+            "type": "function",  # <-- CORRECTION CRUCIALE !!!
             "name": schema.get("name", tname),
             "description": schema.get("description", tname),
             "parameters": {
                 k: v for k, v in schema.items() if k in ("type", "properties", "required")
             }
         })
-        tool_calls[schema.get("name",tname)] = tinfo["function_call"]
-
+        tool_calls[schema.get("name", tname)] = tinfo["function_call"]
+    
     config = st.session_state.cfg
     chat = messages.copy()
     all_steps = []
@@ -159,7 +160,7 @@ def call_llm(messages: List[Dict], tools: Dict[str, Any]=None) -> Dict:
                 "tools": tool_defs,
                 "tool_choice": "auto"
             }
-        else: # Azure
+        else:  # Azure
             openai.api_type = "azure"
             openai.api_version = config["apiver"]
             openai.api_key = config["key"]
@@ -195,7 +196,6 @@ def call_llm(messages: List[Dict], tools: Dict[str, Any]=None) -> Dict:
     else:
         # Ollama/demo fallback
         return {"role": "assistant", "content": "(Réponse LLM simulée/demo locale)", "tools_steps": []}
-
 # ---- 6. Affichage chat ----
 st.subheader("💬 Conversation")
 for m in st.session_state.history:
