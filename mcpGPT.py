@@ -18,6 +18,15 @@ import pptx
 import textwrap
 import inspect
 
+# Default configuration
+DEFAULT_CONFIG = {
+    "api_type": "azure",
+    "api_base": "https://your-endpoint.openai.azure.com/",
+    "api_key": "your-api-key-here",
+    "api_version": "2023-05-15",
+    "model": "gpt-4"
+}
+
 # Application state
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
@@ -42,7 +51,6 @@ def ensure_string_content(content: Any) -> str:
         except:
             return str(content)
     return str(content)
-    st.session_state.available_tools = {}
 
 # Utility functions
 def save_config():
@@ -299,10 +307,9 @@ def show_tool_management():
                             os.remove(os.path.join('tools', f'tool-{tool_name}.py'))
                             load_tools()
                             st.success(f"Tool {tool_name} deleted!")
-                            st.experimental_rerun()
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Error deleting tool: {str(e)}")
-
 
 def chat_with_llm(messages: List[Dict]) -> Dict:
     """Send messages to OpenAI API with content validation"""
@@ -528,4 +535,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
