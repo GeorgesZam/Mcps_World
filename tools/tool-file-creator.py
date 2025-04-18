@@ -1,40 +1,47 @@
-# Tool schema (identique à la version 1)
+# Tool schema
 function_schema = {
     "type": "object",
     "properties": {
         "filename": {
             "type": "string",
             "description": "Nom du fichier SANS extension",
-            "examples": ["mon_script"]
+            "examples": ["mon_programme"]
         },
         "content": {
-            "type": "string",
-            "description": "Contenu du fichier",
-            "examples": ["print('Hello World')"]
+            "type": "string", 
+            "description": "Contenu brut du fichier",
+            "examples": ["def hello():\n    print('Bonjour le monde')"]
         },
         "filetype": {
             "type": "string",
             "description": "Extension du fichier",
             "default": "py",
-            "enum": ["py", "txt", "json", "csv"]
+            "enum": ["py", "txt", "csv", "md", "json"]
         }
     },
     "required": ["filename", "content"]
 }
 
-# Main function modifiée pour Flask
+# Tool description
+description = "Générateur de fichiers avec bouton de téléchargement natif Streamlit"
+
+# Main function (à intégrer dans un script Streamlit)
 def function_call(filename: str, content: str, filetype: str = "py"):
-    """Génère un fichier téléchargeable via HTTP"""
-    from flask import make_response
-    import io
+    """Crée un bouton de téléchargement Streamlit avec prévisualisation"""
+    import streamlit as st
+    import base64
     
-    # Crée un fichier en mémoire
-    buffer = io.BytesIO()
-    buffer.write(content.encode('utf-8'))
-    buffer.seek(0)
+    # Interface utilisateur
+    with st.expander("📁 Prévisualisation du fichier"):
+        st.code(content, language=filetype)
     
-    response = make_response(buffer.getvalue())
-    response.headers['Content-Disposition'] = f'attachment; filename={filename}.{filetype}'
-    response.mimetype = f"text/{filetype}" if filetype != 'json' else 'application/json'
+    # Génération du bouton de téléchargement
+    st.download_button(
+        label="⬇️ Télécharger le fichier",
+        data=content,
+        file_name=f"{filename}.{filetype}",
+        mime=f"text/{filetype}" if filetype != "json" else "application/json",
+        key=f"download_{filename}"
+    )
     
-    return response
+    return f"Fichier {filename}.{filetype} prêt au téléchargement (Taille : {len(content)} octets)"
