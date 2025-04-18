@@ -7,11 +7,10 @@ import openai
 from datetime import datetime
 from typing import Any, Dict, List
 
-st.set_page_config(page_title="🧠 Chat LLM + Hybrid Tools", page_icon="🤖")
+st.set_page_config(page_title="🧠 mcpWorld: LLM + Hybrid Tools", page_icon="🤖")
 
-# -------- 1. Init session --------
 def init_session():
-    """Initializes session state variables if not yet set."""
+    """Initialize Streamlit session state."""
     if "initialized" not in st.session_state:
         st.session_state.initialized = False
         st.session_state.history = []
@@ -20,9 +19,9 @@ def init_session():
         st.session_state.session_id = f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
 init_session()
-st.title("🧠 LLM + TOOLS (robust, non-native)")
+st.title("🧠 mcpWorld: LLM + TOOLS")
 
-# -------- 2. LLM Provider Selection --------
+# -------- 1. LLM Provider Selection --------
 if not st.session_state.initialized:
     st.subheader("Choose LLM Provider")
     provider = st.selectbox("LLM Provider", ["Local Demo", "OpenAI", "Azure OpenAI"], index=0)
@@ -31,7 +30,7 @@ if not st.session_state.initialized:
     elif provider == "OpenAI":
         key = st.text_input("OpenAI API Key", type="password")
         st.session_state.cfg = {"provider": "openai", "key": key}
-    else:  # Azure
+    else:
         endpoint = st.text_input("Azure Endpoint", value="https://")
         az_key = st.text_input("Azure API Key", type="password")
         model = st.text_input("Azure Model Deployment", value="")
@@ -50,7 +49,7 @@ if not st.session_state.initialized:
 
 config = st.session_state.cfg
 
-# -------- 3. Dynamic Tools Management --------
+# -------- 2. Tools Management --------
 TOOLS_FOLDER = "tools"
 os.makedirs(TOOLS_FOLDER, exist_ok=True)
 
@@ -81,7 +80,7 @@ elif not st.session_state.tools:
     st.session_state.tools = load_tools()
 tools = st.session_state.tools
 
-# -------- 4. Sidebar: Upload/Delete/Test Tools --------
+# Sidebar for tool management
 st.sidebar.header("🧩 Tools Management")
 with st.sidebar.expander("➕ Upload new tool"):
     uploaded = st.file_uploader("tool-xxx.py", type="py")
@@ -96,7 +95,7 @@ with st.sidebar.expander("➕ Upload new tool"):
 with st.sidebar.expander("🗑️ Delete Tool"):
     available_tools = list(tools.keys())
     if available_tools:
-        selected = st.selectbox("Select to Delete", options=available_tools)
+        selected = st.selectbox("Select tool to delete", options=available_tools)
         if st.button(f"Delete {selected}"):
             tool_info = tools[selected]
             os.remove(tool_info["source"])
@@ -106,7 +105,7 @@ with st.sidebar.expander("🗑️ Delete Tool"):
     else:
         st.info("No tools loaded.")
 
-with st.sidebar.expander("📋 List & Test Tool"):
+with st.sidebar.expander("📋 List & Test Tools"):
     import inspect
     for tname, tinfo in tools.items():
         st.write(f"**{tname}** - {os.path.basename(tinfo['source'])} - {tinfo.get('doc','')}")
@@ -133,11 +132,10 @@ with st.sidebar.expander("📋 List & Test Tool"):
                 except Exception as ex:
                     st.error(str(ex))
 
-# -------- 5. LLM + Tool Call (by matcher or key) --------
+# -------- 3. LLM + Tool Call --------
 import re
 
 def extract_tool_usages(prompt: str, tools: Dict[str, Any]) -> List[str]:
-    """Returns a list of tool names referenced in the prompt."""
     found = []
     for name, tinfo in tools.items():
         matcher = tinfo.get("matcher", None)
@@ -151,7 +149,6 @@ def extract_tool_usages(prompt: str, tools: Dict[str, Any]) -> List[str]:
     return found
 
 def call_llm(messages: List[Dict[str, Any]], tools: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Calls the LLM and optionally tool(s), returning AI response including tool step info."""
     last_user_input = messages[-1]["content"]
     used_tools = extract_tool_usages(last_user_input, tools)
     steps = []
@@ -167,7 +164,6 @@ def call_llm(messages: List[Dict[str, Any]], tools: Dict[str, Any] = None) -> Di
             if match:
                 val = match.group(1)
                 try:
-                    # Type autocast according to annotation if available
                     annotation = param.annotation
                     if annotation is int:
                         val = int(val)
@@ -177,7 +173,6 @@ def call_llm(messages: List[Dict[str, Any]], tools: Dict[str, Any] = None) -> Di
                     pass
                 args[pname] = val
             else:
-                # Default from signature, still try to cast if annotated
                 if param.default != inspect.Parameter.empty:
                     args[pname] = param.default
                 elif param.annotation is int:
@@ -193,10 +188,9 @@ def call_llm(messages: List[Dict[str, Any]], tools: Dict[str, Any] = None) -> Di
         steps.append({"tool": name, "args": args, "output": output})
         tool_results[name] = output
 
-    # Generate LLM response using tool outputs
     base_prompt = (
-        f"The user requested to use the following tools: {steps}. "
-        "Provide a coherent, clear answer using the results."
+        f"The user requested using the following tools: {steps}. "
+        "Provide a clear, coherent answer using their results."
     )
     response_content = ""
     if config["provider"] == "openai":
@@ -225,11 +219,11 @@ def call_llm(messages: List[Dict[str, Any]], tools: Dict[str, Any] = None) -> Di
         except Exception as e:
             response_content = f"(Azure Error: {e}) - Tool results: {tool_results}"
     else:
-        response_content = f"(Demo/Mock LLM Response) – Tool results: {tool_results}"
+        response_content = f"(Demo LLM Response) – Tool results: {tool_results}"
 
     return {"role": "assistant", "content": response_content, "tools_steps": steps}
 
-# -------- 6. Chat Display --------
+# -------- 4. Chat UI --------
 st.subheader("💬 Conversation")
 for m in st.session_state.history:
     with st.chat_message(m["role"]):
