@@ -18,15 +18,6 @@ import pptx
 import textwrap
 import inspect
 
-# Initial configuration
-DEFAULT_CONFIG = {
-    "api_type": "azure",
-    "api_base": "https://your-endpoint.openai.azure.com/",
-    "api_key": "your-api-key-here",
-    "api_version": "2023-05-15",
-    "model": "gpt-4"
-}
-
 # Application state
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
@@ -35,6 +26,22 @@ if 'conversation' not in st.session_state:
 if 'uploaded_files' not in st.session_state:
     st.session_state.uploaded_files = {}
 if 'available_tools' not in st.session_state:
+    st.session_state.available_tools = {}
+
+def ensure_string_content(content: Any) -> str:
+    """Ensure the content is a valid string, handling null/None and other types"""
+    if content is None:
+        return "[No content]"
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (int, float)):
+        return str(content)
+    if isinstance(content, (dict, list)):
+        try:
+            return json.dumps(content, ensure_ascii=False)
+        except:
+            return str(content)
+    return str(content)
     st.session_state.available_tools = {}
 
 # Utility functions
@@ -296,14 +303,21 @@ def show_tool_management():
                         except Exception as e:
                             st.error(f"Error deleting tool: {str(e)}")
 
-# Chat functions
+
 def chat_with_llm(messages: List[Dict]) -> Dict:
-    """Send messages to OpenAI API"""
+    """Send messages to OpenAI API with content validation"""
     try:
+        # Prepare messages with validated content
+        validated_messages = []
+        for msg in messages:
+            validated_msg = msg.copy()
+            validated_msg['content'] = ensure_string_content(msg.get('content', ''))
+            validated_messages.append(validated_msg)
+        
         tools = get_tools_schema()
         response = openai.ChatCompletion.create(
             engine=st.session_state.config['model'],
-            messages=messages,
+            messages=validated_messages,
             tools=[{"type": "function", "function": t} for t in tools] if tools else None,
             tool_choice="auto" if tools else None,
         )
@@ -390,10 +404,14 @@ def show_chat_page():
     if prompt := st.chat_input("Your message..."):
         now = datetime.now().strftime("%H:%M:%S")
         
-        # Add user message
-        user_msg = {"role": "user", "content": prompt, "timestamp": now}
+        # Add user message with validated content
+        user_msg = {
+            "role": "user", 
+            "content": ensure_string_content(prompt), 
+            "timestamp": now
+        }
         st.session_state.conversation.append(user_msg)
-        
+       
         with st.chat_message("user"):
             st.write(prompt)
             st.caption(f"At {now}")
@@ -510,3 +528,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
