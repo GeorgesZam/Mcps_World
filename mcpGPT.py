@@ -4,7 +4,7 @@ import time
 import os
 import json
 import openai
-from typing import Dict, List
+from typing import Dict, List, Any, Union
 import base64
 from io import StringIO
 import importlib.util
@@ -15,8 +15,10 @@ import pandas as pd
 from PyPDF2 import PdfReader
 from docx import Document
 import pptx
+import textwrap
+import inspect
 
-# Configuration initiale
+# Initial configuration
 DEFAULT_CONFIG = {
     "api_type": "azure",
     "api_base": "https://your-endpoint.openai.azure.com/",
@@ -25,7 +27,7 @@ DEFAULT_CONFIG = {
     "model": "gpt-4"
 }
 
-# État de l'application
+# Application state
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
 if 'conversation' not in st.session_state:
@@ -35,14 +37,14 @@ if 'uploaded_files' not in st.session_state:
 if 'available_tools' not in st.session_state:
     st.session_state.available_tools = {}
 
-# Fonctions utilitaires
+# Utility functions
 def save_config():
-    """Sauvegarde la configuration dans un fichier"""
+    """Save configuration to file"""
     with open('config.json', 'w') as f:
         json.dump(st.session_state.config, f)
 
 def load_config():
-    """Charge la configuration depuis un fichier"""
+    """Load configuration from file"""
     try:
         with open('config.json', 'r') as f:
             st.session_state.config.update(json.load(f))
@@ -50,15 +52,27 @@ def load_config():
         pass
 
 def init_openai():
-    """Initialise le client OpenAI"""
+    """Initialize OpenAI client"""
     openai.api_type = st.session_state.config['api_type']
     openai.api_base = st.session_state.config['api_base']
     openai.api_key = st.session_state.config['api_key']
     openai.api_version = st.session_state.config['api_version']
 
-# Fonctions pour les fichiers
+def convert_to_string(value: Any) -> str:
+    """Convert any value to string safely"""
+    if isinstance(value, (int, float)):
+        return str(value)
+    elif isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    elif isinstance(value, pd.DataFrame):
+        return value.to_markdown()
+    elif value is None:
+        return "None"
+    return str(value)
+
+# File processing functions
 def extract_text_from_pdf(file):
-    """Extrait le texte d'un PDF"""
+    """Extract text from PDF"""
     pdf_reader = PdfReader(file)
     text = ""
     for page in pdf_reader.pages:
@@ -66,17 +80,17 @@ def extract_text_from_pdf(file):
     return text
 
 def extract_text_from_excel(file):
-    """Extrait le texte d'un fichier Excel"""
+    """Extract text from Excel file"""
     df = pd.read_excel(file)
     return df.to_markdown()
 
 def extract_text_from_word(file):
-    """Extrait le texte d'un document Word"""
+    """Extract text from Word document"""
     doc = Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
 def extract_text_from_ppt(file):
-    """Extrait le texte d'une présentation PowerPoint"""
+    """Extract text from PowerPoint presentation"""
     prs = pptx.Presentation(file)
     text = []
     for slide in prs.slides:
@@ -86,7 +100,7 @@ def extract_text_from_ppt(file):
     return "\n".join(text)
 
 def process_uploaded_file(file):
-    """Traite un fichier uploadé selon son type"""
+    """Process uploaded file based on type"""
     file_ext = file.name.split('.')[-1].lower()
     
     if file_ext == 'pdf':
@@ -100,13 +114,15 @@ def process_uploaded_file(file):
     elif file_ext == 'txt':
         return file.read().decode('utf-8')
     else:
-        return f"Contenu du fichier {file.name} non extrait (format non supporté)"
+        return f"File content {file.name} not extracted (unsupported format)"
 
-# Fonctions pour les outils
+# Tool management functions
 def load_tools():
-    """Charge les outils depuis le dossier tools/"""
+    """Load tools from tools/ directory"""
     tools_dir = 'tools'
     os.makedirs(tools_dir, exist_ok=True)
+    
+    st.session_state.available_tools = {}
     
     for tool_path in glob.glob(os.path.join(tools_dir, 'tool-*.py')):
         try:
@@ -117,24 +133,172 @@ def load_tools():
             
             st.session_state.available_tools[tool_name] = {
                 'function': mod.function_call,
-                'schema': getattr(mod, 'function_schema', {})
+                'schema': getattr(mod, 'function_schema', {}),
+                'description': getattr(mod, 'description', "No description available"),
+                'code': inspect.getsource(mod)
             }
         except Exception as e:
-            st.error(f"Erreur de chargement de l'outil {tool_path}: {str(e)}")
+            st.error(f"Error loading tool {tool_path}: {str(e)}")
 
 def get_tools_schema():
-    """Retourne le schéma des outils pour OpenAI"""
+    """Return tools schema for OpenAI"""
     return [
         {
             "name": name,
-            "description": f"Exécute la fonction {name}",
+            "description": info.get('description', f"Execute {name} function"),
             "parameters": info['schema']
         } for name, info in st.session_state.available_tools.items()
     ]
 
-# Fonction principale de chat
+def execute_tool(tool_name: str, arguments: Dict) -> Dict:
+    """Execute a tool and return standardized response"""
+    try:
+        if tool_name not in st.session_state.available_tools:
+            return {
+                "success": False,
+                "content": f"Tool {tool_name} not found",
+                "error": "Tool not found"
+            }
+        
+        tool_func = st.session_state.available_tools[tool_name]['function']
+        result = tool_func(**arguments)
+        
+        return {
+            "success": True,
+            "content": convert_to_string(result),
+            "raw_result": result
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "content": f"Error executing tool {tool_name}: {str(e)}",
+            "error": str(e)
+        }
+
+def show_tool_creation():
+    """Display tool creation interface"""
+    st.header("🛠 Create New Tool")
+    
+    with st.expander("Tool Creation Guide"):
+        st.markdown("""
+        **Required structure for a tool:**
+        1. A `function_call` function that implements the logic
+        2. A `function_schema` in JSON format
+        3. (Optional) A `description` string
+        
+        **Example Code:**
+        ```python
+        # Tool schema
+        function_schema = {
+            "type": "object",
+            "properties": {
+                "param1": {"type": "string", "description": "Parameter description"}
+            },
+            "required": ["param1"]
+        }
+        
+        # Tool description
+        description = "This tool does something useful"
+        
+        # Main function
+        def function_call(param1: str):
+            \"\"\"Does something with param1\"\"\"
+            return f"Result: {param1}"
+        ```
+        """)
+    
+    with st.form("new_tool_form"):
+        tool_name = st.text_input("Tool name (no spaces)")
+        tool_description = st.text_area("Tool description")
+        
+        # Schema editor
+        schema_code = st.text_area(
+            "Tool JSON Schema",
+            value=textwrap.dedent('''\
+            {
+                "type": "object",
+                "properties": {
+                    "param1": {
+                        "type": "string",
+                        "description": "Parameter description"
+                    }
+                },
+                "required": ["param1"]
+            }'''),
+            height=200
+        )
+        
+        # Function editor
+        function_code = st.text_area(
+            "Function Code",
+            value=textwrap.dedent('''\
+            def function_call(param1: str):
+                """Does something with param1"""
+                return f"Result: {param1}"'''),
+            height=300
+        )
+        
+        if st.form_submit_button("Create Tool"):
+            try:
+                # Validate JSON schema
+                schema = json.loads(schema_code)
+                
+                # Create file content
+                tool_content = f'''# tool-{tool_name}.py
+# Description: {tool_description}
+
+function_schema = {schema}
+
+{function_code}
+'''
+                # Save file
+                tool_path = os.path.join('tools', f'tool-{tool_name}.py')
+                with open(tool_path, 'w', encoding='utf-8') as f:
+                    f.write(tool_content)
+                
+                # Reload tools
+                load_tools()
+                st.success(f"Tool '{tool_name}' created successfully!")
+            except json.JSONDecodeError:
+                st.error("Invalid JSON schema - check syntax")
+            except Exception as e:
+                st.error(f"Error creating tool: {str(e)}")
+
+def show_tool_management():
+    """Display tool management interface"""
+    st.header("🔧 Tool Management")
+    
+    tab1, tab2 = st.tabs(["Create Tool", "Existing Tools"])
+    
+    with tab1:
+        show_tool_creation()
+    
+    with tab2:
+        if not st.session_state.available_tools:
+            st.warning("No tools available")
+        else:
+            for tool_name, tool_info in st.session_state.available_tools.items():
+                with st.expander(f"🛠 {tool_name}"):
+                    st.markdown(f"**Description:** {tool_info.get('description', 'No description')}")
+                    
+                    st.markdown("**Schema:**")
+                    st.json(tool_info['schema'])
+                    
+                    st.markdown("**Function Code:**")
+                    st.code(tool_info['code'], language='python')
+                    
+                    if st.button(f"Delete {tool_name}", key=f"del_{tool_name}"):
+                        try:
+                            os.remove(os.path.join('tools', f'tool-{tool_name}.py'))
+                            load_tools()
+                            st.success(f"Tool {tool_name} deleted!")
+                            st.experimental_rerun()
+                        except Exception as e:
+                            st.error(f"Error deleting tool: {str(e)}")
+
+# Chat functions
 def chat_with_llm(messages: List[Dict]) -> Dict:
-    """Envoie les messages à l'API OpenAI"""
+    """Send messages to OpenAI API"""
     try:
         tools = get_tools_schema()
         response = openai.ChatCompletion.create(
@@ -146,56 +310,56 @@ def chat_with_llm(messages: List[Dict]) -> Dict:
         
         return response.choices[0].message
     except Exception as e:
-        st.error(f"Erreur OpenAI: {str(e)}")
+        st.error(f"OpenAI error: {str(e)}")
         return None
 
-# Interface utilisateur
+# UI Pages
 def show_config_page():
-    """Affiche la page de configuration"""
-    st.title("🔧 Configuration de l'API")
+    """Display API configuration page"""
+    st.title("🔧 API Configuration")
     
     with st.form("api_config"):
         st.session_state.config['api_type'] = st.selectbox(
-            "Type d'API",
+            "API Type",
             ["azure", "openai"],
             index=0 if st.session_state.config['api_type'] == "azure" else 1
         )
         
         st.session_state.config['api_base'] = st.text_input(
-            "Endpoint API",
+            "API Endpoint",
             value=st.session_state.config['api_base']
         )
         
         st.session_state.config['api_key'] = st.text_input(
-            "Clé API",
+            "API Key",
             type="password",
             value=st.session_state.config['api_key']
         )
         
         st.session_state.config['api_version'] = st.text_input(
-            "Version API",
+            "API Version",
             value=st.session_state.config['api_version']
         )
         
         st.session_state.config['model'] = st.text_input(
-            "Modèle",
+            "Model",
             value=st.session_state.config['model']
         )
         
-        if st.form_submit_button("Sauvegarder la configuration"):
+        if st.form_submit_button("Save Configuration"):
             save_config()
             init_openai()
-            st.success("Configuration sauvegardée!")
+            st.success("Configuration saved!")
 
 def show_chat_page():
-    """Affiche la page de chat principale"""
-    st.title("💬 Chat Intelligent")
+    """Display main chat page"""
+    st.title("💬 Smart Chat")
     
-    # Sidebar pour les fichiers et outils
+    # Sidebar for files and tools
     with st.sidebar:
-        st.header("📁 Fichiers")
+        st.header("📁 Files")
         uploaded_files = st.file_uploader(
-            "Ajouter des fichiers",
+            "Upload files",
             type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt'],
             accept_multiple_files=True
         )
@@ -204,86 +368,79 @@ def show_chat_page():
             if file.name not in st.session_state.uploaded_files:
                 content = process_uploaded_file(file)
                 st.session_state.uploaded_files[file.name] = content
-                st.success(f"Fichier {file.name} traité!")
+                st.success(f"File {file.name} processed!")
         
-        st.header("🛠 Outils")
-        if st.button("Recharger les outils"):
+        st.header("🛠 Tools")
+        if st.button("Reload Tools"):
             load_tools()
-            st.success("Outils rechargés!")
+            st.success("Tools reloaded!")
         
-        st.write("Outils disponibles:")
-        for tool_name in st.session_state.available_tools:
-            st.write(f"- {tool_name}")
+        if st.button("Manage Tools"):
+            st.session_state.current_page = "Tool Management"
+            st.experimental_rerun()
     
-    # Afficher l'historique
+    # Display conversation
     for msg in st.session_state.conversation:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
             if msg.get("timestamp"):
-                st.caption(f"À {msg['timestamp']}")
+                st.caption(f"At {msg['timestamp']}")
     
-    # Gestion des messages
-    if prompt := st.chat_input("Votre message..."):
+    # Handle new messages
+    if prompt := st.chat_input("Your message..."):
         now = datetime.now().strftime("%H:%M:%S")
         
-        # Ajouter le message utilisateur
+        # Add user message
         user_msg = {"role": "user", "content": prompt, "timestamp": now}
         st.session_state.conversation.append(user_msg)
         
         with st.chat_message("user"):
             st.write(prompt)
-            st.caption(f"À {now}")
+            st.caption(f"At {now}")
         
-        with st.spinner("Réflexion..."):
+        with st.spinner("Thinking..."):
             start_time = time.time()
             
-            # Préparer le contexte avec les fichiers uploadés
+            # Prepare context with uploaded files
             context = []
             if st.session_state.uploaded_files:
                 context.append({
                     "role": "system",
-                    "content": "Fichiers joints:\n" + "\n\n".join(
+                    "content": "Attached files:\n" + "\n\n".join(
                         f"=== {name} ===\n{content}" 
                         for name, content in st.session_state.uploaded_files.items()
                     )
                 })
             
-            # Ajouter l'historique de conversation
+            # Add conversation history
             messages = context + [
                 {"role": msg["role"], "content": msg["content"]} 
                 for msg in st.session_state.conversation
                 if msg["role"] in ["user", "assistant", "system"]
             ]
             
-            # Premier appel au LLM
+            # First LLM call
             response = chat_with_llm(messages)
             
             if response:
-                # Gestion des outils
+                # Handle tool calls
                 if hasattr(response, 'tool_calls') and response.tool_calls:
-                    # Exécuter les outils
+                    # Execute tools
                     tool_responses = []
                     for call in response.tool_calls:
                         tool_name = call.function.name
-                        if tool_name in st.session_state.available_tools:
-                            try:
-                                args = json.loads(call.function.arguments)
-                                result = st.session_state.available_tools[tool_name]['function'](**args)
-                                tool_responses.append({
-                                    "role": "tool",
-                                    "content": str(result),
-                                    "name": tool_name,
-                                    "tool_call_id": call.id
-                                })
-                            except Exception as e:
-                                tool_responses.append({
-                                    "role": "tool",
-                                    "content": f"Erreur: {str(e)}",
-                                    "name": tool_name,
-                                    "tool_call_id": call.id
-                                })
+                        args = json.loads(call.function.arguments)
+                        
+                        tool_result = execute_tool(tool_name, args)
+                        
+                        tool_responses.append({
+                            "role": "tool",
+                            "content": tool_result['content'],
+                            "name": tool_name,
+                            "tool_call_id": call.id
+                        })
                     
-                    # Ajouter les réponses des outils
+                    # Add tool responses
                     messages.append({
                         "role": response.role,
                         "content": response.content,
@@ -291,54 +448,65 @@ def show_chat_page():
                     })
                     messages.extend(tool_responses)
                     
-                    # Deuxième appel avec les résultats des outils
+                    # Second call with tool results
                     final_response = chat_with_llm(messages)
                     
                     if final_response:
                         assistant_msg = {
                             "role": "assistant",
                             "content": final_response.content,
-                            "timestamp": datetime.now().strftime("%H:%M:%S")
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                            "tools_used": [call.function.name for call in response.tool_calls]
                         }
                     else:
                         assistant_msg = {
                             "role": "assistant",
-                            "content": "Erreur lors de la réponse finale",
+                            "content": "Error getting final response",
                             "timestamp": datetime.now().strftime("%H:%M:%S")
                         }
                 else:
-                    # Réponse simple sans outils
+                    # Simple response without tools
                     assistant_msg = {
                         "role": "assistant",
                         "content": response.content,
                         "timestamp": datetime.now().strftime("%H:%M:%S")
                     }
                 
-                # Ajouter à la conversation
+                # Add to conversation
                 st.session_state.conversation.append(assistant_msg)
                 
-                # Afficher la réponse
+                # Display response
                 with st.chat_message("assistant"):
                     st.write(assistant_msg["content"])
-                    st.caption(f"Réponse en {time.time()-start_time:.2f}s à {assistant_msg['timestamp']}")
+                    st.caption(f"Response in {time.time()-start_time:.2f}s at {assistant_msg['timestamp']}")
+                    if "tools_used" in assistant_msg:
+                        st.info(f"Tools used: {', '.join(assistant_msg['tools_used'])}")
 
-# Page principale
+# Main application
 def main():
-    """Gestion des pages de l'application"""
+    """Main application flow"""
     load_config()
     init_openai()
     load_tools()
     
-    pages = {
-        "Chat": show_chat_page,
-        "Configuration": show_config_page
-    }
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "Chat"
     
+    # Navigation sidebar
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Aller à", list(pages.keys()))
+    st.session_state.current_page = st.sidebar.radio(
+        "Go to",
+        ["Chat", "API Configuration", "Tool Management"],
+        index=["Chat", "API Configuration", "Tool Management"].index(st.session_state.current_page)
+    )
     
-    # Afficher la page sélectionnée
-    pages[page]()
+    # Display current page
+    if st.session_state.current_page == "Chat":
+        show_chat_page()
+    elif st.session_state.current_page == "API Configuration":
+        show_config_page()
+    elif st.session_state.current_page == "Tool Management":
+        show_tool_management()
 
 if __name__ == "__main__":
     main()
