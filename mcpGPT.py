@@ -36,6 +36,8 @@ if 'uploaded_files' not in st.session_state:
     st.session_state.uploaded_files = {}
 if 'available_tools' not in st.session_state:
     st.session_state.available_tools = {}
+if 'tool_debug_info' not in st.session_state:
+    st.session_state.tool_debug_info = []
 
 def ensure_string_content(content: Any) -> str:
     """Ensure the content is a valid string, handling null/None and other types"""
@@ -85,7 +87,7 @@ def convert_to_string(value: Any) -> str:
         return "None"
     return str(value)
 
-# File processing functions
+# Enhanced file processing functions
 def extract_text_from_pdf(file):
     """Extract text from PDF"""
     pdf_reader = PdfReader(file)
@@ -96,8 +98,19 @@ def extract_text_from_pdf(file):
 
 def extract_text_from_excel(file):
     """Extract text from Excel file"""
-    df = pd.read_excel(file)
-    return df.to_markdown()
+    try:
+        df = pd.read_excel(file)
+        return df.to_markdown()
+    except Exception as e:
+        return f"Error reading Excel file: {str(e)}"
+
+def extract_text_from_csv(file):
+    """Extract text from CSV file"""
+    try:
+        df = pd.read_csv(file)
+        return df.to_markdown()
+    except Exception as e:
+        return f"Error reading CSV file: {str(e)}"
 
 def extract_text_from_word(file):
     """Extract text from Word document"""
@@ -115,13 +128,15 @@ def extract_text_from_ppt(file):
     return "\n".join(text)
 
 def process_uploaded_file(file):
-    """Process uploaded file based on type"""
+    """Process uploaded file based on type with enhanced support"""
     file_ext = file.name.split('.')[-1].lower()
     
     if file_ext == 'pdf':
         return extract_text_from_pdf(file)
     elif file_ext in ['xlsx', 'xls']:
         return extract_text_from_excel(file)
+    elif file_ext == 'csv':
+        return extract_text_from_csv(file)
     elif file_ext == 'docx':
         return extract_text_from_word(file)
     elif file_ext == 'pptx':
@@ -131,7 +146,7 @@ def process_uploaded_file(file):
     else:
         return f"File content {file.name} not extracted (unsupported format)"
 
-# Tool management functions
+# Enhanced tool management with debug info
 def load_tools():
     """Load tools from tools/ directory"""
     tools_dir = 'tools'
@@ -166,151 +181,78 @@ def get_tools_schema():
     ]
 
 def execute_tool(tool_name: str, arguments: Dict) -> Dict:
-    """Execute a tool and return standardized response"""
+    """Execute a tool and return standardized response with debug info"""
     try:
         if tool_name not in st.session_state.available_tools:
+            error_msg = f"Tool {tool_name} not found"
+            st.session_state.tool_debug_info.append({
+                'tool': tool_name,
+                'input': arguments,
+                'output': error_msg,
+                'success': False
+            })
             return {
                 "success": False,
-                "content": f"Tool {tool_name} not found",
+                "content": error_msg,
                 "error": "Tool not found"
             }
         
         tool_func = st.session_state.available_tools[tool_name]['function']
         result = tool_func(**arguments)
         
+        debug_info = {
+            'tool': tool_name,
+            'input': arguments,
+            'output': result,
+            'success': True,
+            'timestamp': datetime.now().strftime("%H:%M:%S")
+        }
+        st.session_state.tool_debug_info.append(debug_info)
+        
         return {
             "success": True,
             "content": convert_to_string(result),
-            "raw_result": result
+            "raw_result": result,
+            "debug_info": debug_info
         }
     except Exception as e:
+        error_msg = f"Error executing tool {tool_name}: {str(e)}"
+        st.session_state.tool_debug_info.append({
+            'tool': tool_name,
+            'input': arguments,
+            'output': error_msg,
+            'success': False,
+            'timestamp': datetime.now().strftime("%H:%M:%S")
+        })
         return {
             "success": False,
-            "content": f"Error executing tool {tool_name}: {str(e)}",
+            "content": error_msg,
             "error": str(e)
         }
 
-def show_tool_creation():
-    """Display tool creation interface"""
-    st.header("🛠 Create New Tool")
+def show_tool_debug_info():
+    """Display tool debug information"""
+    if not st.session_state.tool_debug_info:
+        return
     
-    with st.expander("Tool Creation Guide"):
-        st.markdown("""
-        **Required structure for a tool:**
-        1. A `function_call` function that implements the logic
-        2. A `function_schema` in JSON format
-        3. (Optional) A `description` string
-        
-        **Example Code:**
-        ```python
-        # Tool schema
-        function_schema = {
-            "type": "object",
-            "properties": {
-                "param1": {"type": "string", "description": "Parameter description"}
-            },
-            "required": ["param1"]
-        }
-        
-        # Tool description
-        description = "This tool does something useful"
-        
-        # Main function
-        def function_call(param1: str):
-            \"\"\"Does something with param1\"\"\"
-            return f"Result: {param1}"
-        ```
-        """)
-    
-    with st.form("new_tool_form"):
-        tool_name = st.text_input("Tool name (no spaces)")
-        tool_description = st.text_area("Tool description")
-        
-        # Schema editor
-        schema_code = st.text_area(
-            "Tool JSON Schema",
-            value=textwrap.dedent('''\
-            {
-                "type": "object",
-                "properties": {
-                    "param1": {
-                        "type": "string",
-                        "description": "Parameter description"
-                    }
-                },
-                "required": ["param1"]
-            }'''),
-            height=200
-        )
-        
-        # Function editor
-        function_code = st.text_area(
-            "Function Code",
-            value=textwrap.dedent('''\
-            def function_call(param1: str):
-                """Does something with param1"""
-                return f"Result: {param1}"'''),
-            height=300
-        )
-        
-        if st.form_submit_button("Create Tool"):
-            try:
-                # Validate JSON schema
-                schema = json.loads(schema_code)
-                
-                # Create file content
-                tool_content = f'''# tool-{tool_name}.py
-# Description: {tool_description}
+    st.subheader("🛠 Tool Execution Debug")
+    for debug in reversed(st.session_state.tool_debug_info):
+        with st.expander(f"{debug['tool']} - {debug['timestamp']} - {'✅' if debug['success'] else '❌'}"):
+            st.markdown("**Input Parameters:**")
+            st.json(debug['input'])
+            
+            st.markdown("**Output:**")
+            if isinstance(debug['output'], (pd.DataFrame, pd.Series)):
+                st.dataframe(debug['output'])
+            elif isinstance(debug['output'], (dict, list)):
+                st.json(debug['output'])
+            else:
+                st.text(convert_to_string(debug['output']))
+            
+            if not debug['success']:
+                st.error("Execution failed")
 
-function_schema = {schema}
-
-{function_code}
-'''
-                # Save file
-                tool_path = os.path.join('tools', f'tool-{tool_name}.py')
-                with open(tool_path, 'w', encoding='utf-8') as f:
-                    f.write(tool_content)
-                
-                # Reload tools
-                load_tools()
-                st.success(f"Tool '{tool_name}' created successfully!")
-            except json.JSONDecodeError:
-                st.error("Invalid JSON schema - check syntax")
-            except Exception as e:
-                st.error(f"Error creating tool: {str(e)}")
-
-def show_tool_management():
-    """Display tool management interface"""
-    st.header("🔧 Tool Management")
-    
-    tab1, tab2 = st.tabs(["Create Tool", "Existing Tools"])
-    
-    with tab1:
-        show_tool_creation()
-    
-    with tab2:
-        if not st.session_state.available_tools:
-            st.warning("No tools available")
-        else:
-            for tool_name, tool_info in st.session_state.available_tools.items():
-                with st.expander(f"🛠 {tool_name}"):
-                    st.markdown(f"**Description:** {tool_info.get('description', 'No description')}")
-                    
-                    st.markdown("**Schema:**")
-                    st.json(tool_info['schema'])
-                    
-                    st.markdown("**Function Code:**")
-                    st.code(tool_info['code'], language='python')
-                    
-                    if st.button(f"Delete {tool_name}", key=f"del_{tool_name}"):
-                        try:
-                            os.remove(os.path.join('tools', f'tool-{tool_name}.py'))
-                            load_tools()
-                            st.success(f"Tool {tool_name} deleted!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error deleting tool: {str(e)}")
-
+# Chat functions with enhanced tool debugging
 def chat_with_llm(messages: List[Dict]) -> Dict:
     """Send messages to OpenAI API with content validation"""
     try:
@@ -373,7 +315,7 @@ def show_config_page():
             st.success("Configuration saved!")
 
 def show_chat_page():
-    """Display main chat page"""
+    """Display main chat page with enhanced tool debugging"""
     st.title("💬 Smart Chat")
     
     # Sidebar for files and tools
@@ -381,7 +323,7 @@ def show_chat_page():
         st.header("📁 Files")
         uploaded_files = st.file_uploader(
             "Upload files",
-            type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt'],
+            type=['pdf', 'xlsx', 'xls', 'csv', 'docx', 'pptx', 'txt'],
             accept_multiple_files=True
         )
         
@@ -481,7 +423,8 @@ def show_chat_page():
                             "role": "assistant",
                             "content": final_response.content,
                             "timestamp": datetime.now().strftime("%H:%M:%S"),
-                            "tools_used": [call.function.name for call in response.tool_calls]
+                            "tools_used": [call.function.name for call in response.tool_calls],
+                            "tool_debug_info": [t['debug_info'] for t in tool_responses if 'debug_info' in t]
                         }
                     else:
                         assistant_msg = {
@@ -504,8 +447,24 @@ def show_chat_page():
                 with st.chat_message("assistant"):
                     st.write(assistant_msg["content"])
                     st.caption(f"Response in {time.time()-start_time:.2f}s at {assistant_msg['timestamp']}")
+                    
                     if "tools_used" in assistant_msg:
-                        st.info(f"Tools used: {', '.join(assistant_msg['tools_used'])}")
+                        with st.expander(f"🔧 Tools used: {', '.join(assistant_msg['tools_used'])}"):
+                            if "tool_debug_info" in assistant_msg:
+                                for debug in assistant_msg['tool_debug_info']:
+                                    st.markdown(f"**{debug['tool']}**")
+                                    st.markdown("**Input:**")
+                                    st.json(debug['input'])
+                                    st.markdown("**Output:**")
+                                    if isinstance(debug['output'], (pd.DataFrame, pd.Series)):
+                                        st.dataframe(debug['output'])
+                                    elif isinstance(debug['output'], (dict, list)):
+                                        st.json(debug['output'])
+                                    else:
+                                        st.text(convert_to_string(debug['output']))
+    
+    # Show debug info at the bottom
+    show_tool_debug_info()
 
 # Main application
 def main():
