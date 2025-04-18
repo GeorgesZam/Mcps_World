@@ -377,7 +377,7 @@ def show_chat_page():
         
         if st.button("Manage Tools"):
             st.session_state.current_page = "Tool Management"
-            st.experimental_rerun()
+            st.rerun()
     
     # Display conversation
     for msg in st.session_state.conversation:
