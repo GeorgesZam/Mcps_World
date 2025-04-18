@@ -1,9 +1,7 @@
-# tool/web-search.py
-
 import requests
 from bs4 import BeautifulSoup
+import urllib.parse
 
-# Schéma pour spécifier la structure attendue des appels
 function_schema = {
     "type": "object",
     "properties": {
@@ -16,28 +14,56 @@ function_schema = {
 }
 
 def function_call(query: str) -> str:
+    """
+    Scraping Google Search avec timeout, encodage, détection de blocage, et CSS selectors à jour.
+    """
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+        # Encodage de la requête
+        params = {
+            "q": query,
+            "hl": "fr",         # langue
+            "gl": "fr",         # pays
+            "num": 5            # nombre de résultats
         }
-        response = requests.get(f"https://www.google.com/search?q={query}", headers=headers)
-        response.raise_for_status()
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/115.0 Safari/537.36"
+            ),
+            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8"
+        }
+        resp = requests.get(
+            "https://www.google.com/search",
+            params=params,
+            headers=headers,
+            timeout=5
+        )
+        resp.raise_for_status()
+        html = resp.text
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        # Détection d’un éventuel blocage / captcha
+        if "Our systems have detected unusual traffic" in html or "désolé" in html.lower():
+            return "Erreur : Google a bloqué la requête (Captcha ou filtrage)."
+
+        soup = BeautifulSoup(html, "html.parser")
         results = []
-
-        for g in soup.select("div.g"):
-            title = g.select_one("h3")
-            link = g.select_one("a")
-            if title and link:
-                results.append(f"{title.text} ({link['href']})")
+        # Google change souvent sa structure : on cible le container principal
+        for g in soup.select("div#search .g"):
+            title_tag = g.find("h3")
+            link_tag  = g.find("a", href=True)
+            if title_tag and link_tag:
+                title = title_tag.get_text().strip()
+                href  = link_tag["href"]
+                # Nettoyage si Google renvoie un lien de tracking
+                if href.startswith("/url?"):
+                    href = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("q", [href])[0]
+                results.append(f"{title} — {href}")
             if len(results) >= 5:
                 break
 
-        if not results:
-            return "Aucun résultat trouvé."
-
-        return "\n".join(results)
-
+        return "\n".join(results) if results else "Aucun résultat trouvé."
+    except requests.Timeout:
+        return "Erreur : délai de connexion dépassé."
     except Exception as e:
-        return f"Erreur lors de la recherche : {str(e)}"
+        return f"Erreur inattendue : {e}"
