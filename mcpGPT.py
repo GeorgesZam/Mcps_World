@@ -374,7 +374,7 @@ def show_config_page():
         
         if st.form_submit_button("Save Configuration"):
             # save_config()
-            if "config" not in session_state:
+            if "config" not in st.session_state:
                 st.session_state["config"] = {}
             st.session_state.config.api_type = api_type
             st.session_state.config.api_base = api_base
