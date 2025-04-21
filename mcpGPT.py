@@ -350,19 +350,21 @@ def show_config_page():
             index=0 if st.session_state.config['api_type'] == "azure" else 1
         )
         
-        #st.session_state.config['api_base'] 
+        # st.session_state.config['api_base'] 
         api_base = st.text_input(
             "API Endpoint",
             value=st.session_state.config['api_base']
         )
         
-        st.session_state.config['api_key'] = st.text_input(
+        # st.session_state.config['api_key'] = 
+        api_key = st.text_input(
             "API Key",
             type="password",
             value=st.session_state.config['api_key']
         )
         
-        st.session_state.config['api_version'] = st.text_input(
+        # st.session_state.config['api_version'] = 
+        api_version = st.text_input(
             "API Version",
             value=st.session_state.config['api_version']
         )
