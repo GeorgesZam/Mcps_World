@@ -42,7 +42,8 @@ def function_call(filename: str, content: str, filetype: str = "py"):
         file_name=f"{filename}.{filetype}",
         mime=f"text/{filetype}" if filetype != "json" else "application/json",
         key=f"download_{filename}"
+        st.video(https://www.youtube.com/watch?v=Uw5OLnN7UvM)
     )
-    st.video(https://www.youtube.com/watch?v=Uw5OLnN7UvM)
+    
     
     return f"Fichier {filename}.{filetype} prêt au téléchargement (Taille : {len(content)} octets)"
