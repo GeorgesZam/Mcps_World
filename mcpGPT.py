@@ -376,10 +376,10 @@ def show_config_page():
             # save_config()
             if "config" not in st.session_state:
                 st.session_state["config"] = {}
-            st.session_state.config.api_type = api_type
-            st.session_state.config.api_base = api_base
-            st.session_state.config.api_key = api_key
-            st.session_state.config.api_version = api_version
+            st.session_state.config["api_type"] = api_type
+            st.session_state.config["api_base"] = api_base
+            st.session_state.config["api_key"] = api_key
+            st.session_state.config["api_version"] = api_version
 
             init_openai()
             st.success("Configuration saved!")
