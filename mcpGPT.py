@@ -60,6 +60,9 @@ def save_config():
 
 def load_config():
     """Load configuration from file"""
+
+    return
+    
     try:
         with open('config.json', 'r') as f:
             st.session_state.config.update(json.load(f))
@@ -340,13 +343,15 @@ def show_config_page():
     st.title("🔧 API Configuration")
     
     with st.form("api_config"):
-        st.session_state.config['api_type'] = st.selectbox(
+        #st.session_state.config['api_type'] 
+        api_type = st.selectbox(
             "API Type",
             ["azure", "openai"],
             index=0 if st.session_state.config['api_type'] == "azure" else 1
         )
         
-        st.session_state.config['api_base'] = st.text_input(
+        #st.session_state.config['api_base'] 
+        api_base = st.text_input(
             "API Endpoint",
             value=st.session_state.config['api_base']
         )
@@ -368,7 +373,14 @@ def show_config_page():
         )
         
         if st.form_submit_button("Save Configuration"):
-            save_config()
+            # save_config()
+            if "config" not in session_state:
+                st.session_state["config"] = {}
+            st.session_state.config.api_type = api_type
+            st.session_state.config.api_base = api_base
+            st.session_state.config.api_key = api_key
+            st.session_state.config.api_version = api_version
+
             init_openai()
             st.success("Configuration saved!")
 
