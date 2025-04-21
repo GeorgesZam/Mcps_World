@@ -23,8 +23,8 @@ DEFAULT_CONFIG = {
     "api_type": "azure",
     "api_base": "https://your-endpoint.openai.azure.com/",
     "api_key": "your-api-key-here",
-    "api_version": "2023-05-15",
-    "model": "gpt-4"
+    "api_version": "2023-03-15-preview",
+    "model": "gpt-4o-mini"
 }
 
 # Application state
@@ -393,7 +393,7 @@ def show_chat_page():
         st.header("📁 Files")
         uploaded_files = st.file_uploader(
             "Upload files",
-            type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt'],
+            type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt', 'csv'],
             accept_multiple_files=True
         )
         
