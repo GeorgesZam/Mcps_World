@@ -1,6 +1,5 @@
 import streamlit as st
 from datetime import datetime
-import time
 import os
 import json
 import openai
@@ -16,17 +15,7 @@ import pptx
 # ---------- PAGE CONFIG ----------
 st.set_page_config(page_title="mcpGPT", layout="wide")
 
-# ---------- CSS STYLES ----------
-st.markdown("""
-<style>
-.chat-container { max-height: 70vh; overflow-y: auto; padding: 1rem; background: #f5f5f5; border-radius: 8px; }
-.chat-user { background: #dcf8c6; padding: .75rem; border-radius: 12px; margin-bottom: .5rem; width: fit-content; }
-.chat-assistant { background: #fff; padding: .75rem; border-radius: 12px; margin-bottom: .5rem; width: fit-content; }
-</style>
-""", unsafe_allow_html=True)
-
 # ---------- STATE ----------
-# Single API configuration
 DEFAULT_CONFIG = {
     "api_type": "azure",
     "api_base": "https://your-endpoint.openai.azure.com/",
@@ -47,8 +36,10 @@ if 'page' not in st.session_state:
 
 # ---------- UTILS ----------
 def ensure_str(x: Any) -> str:
-    if x is None: return "[No content]"
-    if isinstance(x, (dict, list)): return json.dumps(x, ensure_ascii=False)
+    if x is None:
+        return "[No content]"
+    if isinstance(x, (dict, list)):
+        return json.dumps(x, ensure_ascii=False)
     return str(x)
 
 # ---------- CONFIG HANDLING ----------
@@ -94,7 +85,7 @@ def extract_text(file) -> str:
 
 # ---------- LLM & TOOL EXECUTION ----------
 def get_tools_schema():
-    return [{"name":n, "description":t['desc'], "parameters":t['schema']} for n, t in st.session_state.tools.items()]
+    return [{"name": n, "description": t['desc'], "parameters": t['schema']} for n, t in st.session_state.tools.items()]
 
 def call_llm(messages: List[Dict[str, Any]]):
     tools = get_tools_schema()
@@ -110,7 +101,7 @@ def call_llm(messages: List[Dict[str, Any]]):
 def sidebar():
     st.sidebar.title("mcpGPT")
     # Navigation
-    st.sidebar.radio("Navigation", ["chat", "api", "tools"], index=["chat","api","tools"].index(st.session_state.page), key='page')
+    st.sidebar.radio("Navigation", ["chat", "api", "tools"], index=["chat", "api", "tools"].index(st.session_state.page), key='page')
     st.sidebar.markdown('---')
     # Tools
     st.sidebar.subheader("🛠 Tools")
@@ -130,22 +121,23 @@ def sidebar():
 # ---------- PAGES ----------
 def page_chat():
     st.header("💬 Chat")
-    # Display conversation
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    # Display conversation using Streamlit chat UI
     for msg in st.session_state.conversation:
-        cls = 'chat-user' if msg['role']=='user' else 'chat-assistant'
-        st.markdown(f'<div class="{cls}">{msg["content"]}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    # Input
-    user_input = st.text_input("Your message…", key='inp')
+        with st.chat_message(msg['role']):
+            st.write(msg['content'])
+    # User input
+    user_input = st.chat_input("Your message…")
     if user_input:
-        st.session_state.conversation.append({"role":"user", "content": user_input})
-        messages = [{"role": "system", "content": "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n,c in st.session_state.files.items())}]
+        st.session_state.conversation.append({"role": "user", "content": user_input})
+        # Prepare messages
+        system_ctx = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
+        messages = [{"role": "system", "content": system_ctx}]
         messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
+        # Call LLM
         with st.spinner("Thinking…"):
             resp = call_llm(messages)
         text = ensure_str(resp.content)
-        st.session_state.conversation.append({"role":"assistant", "content": text})
+        st.session_state.conversation.append({"role": "assistant", "content": text})
         st.experimental_rerun()
 
 
@@ -153,7 +145,7 @@ def page_api():
     st.header("🔧 API Configuration")
     cfg = st.session_state.config
     with st.form("cfg"):
-        cfg['api_type'] = st.selectbox("API Type", ["azure","openai"], index=["azure","openai"].index(cfg['api_type']))
+        cfg['api_type'] = st.selectbox("API Type", ["azure", "openai"], index=["azure", "openai"].index(cfg['api_type']))
         cfg['api_base'] = st.text_input("Endpoint", cfg['api_base'])
         cfg['api_key'] = st.text_input("Key", cfg['api_key'], type="password")
         cfg['api_version'] = st.text_input("Version", cfg['api_version'])
@@ -165,12 +157,13 @@ def page_api():
 
 def page_tools():
     st.header("🔧 Tool Management")
-    tabs = st.tabs(["Upload","Existing"])
+    tabs = st.tabs(["Upload", "Existing"])
     with tabs[0]:
         f = st.file_uploader("Upload .py tool", type='py')
         if f:
             path = os.path.join('tools', f.name)
-            with open(path,'wb') as wf: wf.write(f.getbuffer())
+            with open(path, 'wb') as wf:
+                wf.write(f.getbuffer())
             load_tools()
             st.success("Tool uploaded.")
     with tabs[1]:
