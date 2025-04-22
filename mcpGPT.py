@@ -192,18 +192,24 @@ def execute_tool(tool_name: str, arguments: Dict) -> Dict:
             "content": f"Error executing tool {tool_name}: {str(e)}",
             "error": str(e)
         }
+import os
+import json
+import textwrap
+import streamlit as st
 
 def show_tool_creation():
     """Display tool creation interface"""
     st.header("🛠 Create New Tool")
-    
+
     with st.expander("Tool Creation Guide"):
         st.markdown("""
+        **You can either upload a `.py` file or fill in the form below.**
+
         **Required structure for a tool:**
-        1. A `function_call` function that implements the logic
-        2. A `function_schema` in JSON format
+        1. A `function_call` function that implements the logic  
+        2. A `function_schema` in JSON format  
         3. (Optional) A `description` string
-        
+
         **Example Code:**
         ```python
         # Tool schema
@@ -214,21 +220,35 @@ def show_tool_creation():
             },
             "required": ["param1"]
         }
-        
+
         # Tool description
         description = "This tool does something useful"
-        
+
         # Main function
         def function_call(param1: str):
             \"\"\"Does something with param1\"\"\"
             return f"Result: {param1}"
         ```
         """)
-    
+
+    # Upload section
+    uploaded_file = st.file_uploader("Upload a complete .py tool file", type="py")
+    if uploaded_file is not None:
+        try:
+            tool_name = uploaded_file.name.replace(".py", "")
+            tool_path = os.path.join("tools", uploaded_file.name)
+            with open(tool_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            load_tools()
+            st.success(f"Tool '{tool_name}' uploaded successfully!")
+        except Exception as e:
+            st.error(f"Upload failed: {str(e)}")
+
+    st.subheader("Or manually create a tool")
     with st.form("new_tool_form"):
         tool_name = st.text_input("Tool name (no spaces)")
         tool_description = st.text_area("Tool description")
-        
+
         # Schema editor
         schema_code = st.text_area(
             "Tool JSON Schema",
@@ -245,7 +265,7 @@ def show_tool_creation():
             }'''),
             height=200
         )
-        
+
         # Function editor
         function_code = st.text_area(
             "Function Code",
@@ -255,17 +275,17 @@ def show_tool_creation():
                 return f"Result: {param1}"'''),
             height=300
         )
-        
+
         if st.form_submit_button("Create Tool"):
             try:
                 # Validate JSON schema
                 schema = json.loads(schema_code)
-                
+
                 # Create file content
                 tool_content = f'''# tool-{tool_name}.py
 # Description: {tool_description}
 
-function_schema = {schema}
+function_schema = {json.dumps(schema, indent=4)}
 
 {function_code}
 '''
@@ -273,14 +293,14 @@ function_schema = {schema}
                 tool_path = os.path.join('tools', f'tool-{tool_name}.py')
                 with open(tool_path, 'w', encoding='utf-8') as f:
                     f.write(tool_content)
-                
-                # Reload tools
+
                 load_tools()
                 st.success(f"Tool '{tool_name}' created successfully!")
             except json.JSONDecodeError:
                 st.error("Invalid JSON schema - check syntax")
             except Exception as e:
                 st.error(f"Error creating tool: {str(e)}")
+
 
 def show_tool_management():
     """Display tool management interface"""
