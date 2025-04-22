@@ -110,21 +110,22 @@ def sidebar():
         st.sidebar.success("Tools reloaded!")
     for name in st.session_state.tools:
         st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
-    # Files
-    st.sidebar.subheader("📁 Files")
-    files = st.sidebar.file_uploader("Upload files", type=['pdf','xlsx','xls','docx','pptx','txt','csv'], accept_multiple_files=True)
-    for f in files:
-        if f.name not in st.session_state.files:
-            st.session_state.files[f.name] = extract_text(f)
-            st.sidebar.success(f"Processed {f.name}")
 
 # ---------- PAGES ----------
 def page_chat():
     st.header("💬 Chat")
+    # File uploader in chat page
+    files = st.file_uploader("Upload files to context", type=['pdf','xlsx','xls','docx','pptx','txt','csv'], accept_multiple_files=True)
+    for f in files:
+        if f and f.name not in st.session_state.files:
+            st.session_state.files[f.name] = extract_text(f)
+            st.success(f"Processed {f.name}")
+
     # Display conversation using Streamlit chat UI
     for msg in st.session_state.conversation:
         with st.chat_message(msg['role']):
             st.write(msg['content'])
+
     # User input
     user_input = st.chat_input("Your message…")
     if user_input:
