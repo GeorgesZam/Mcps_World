@@ -1,9 +1,9 @@
 # tool-video_to_text.py
-# Description: Extract full transcript text from a YouTube video using Whisper.
+# Description: Extract full transcript text from a YouTube video using OpenAI Whisper API.
 
 import tempfile
 from pytube import YouTube
-import whisper
+import openai
 
 # Schema for get_tools_schema()
 function_schema = {
@@ -17,26 +17,29 @@ function_schema = {
     "required": ["video_url"]
 }
 
+# Description shown in the Tools management UI
 description = (
-    "Download a YouTube video audio track and transcribe it to text using Whisper."
+    "Download a YouTube video's audio track and transcribe it to text using OpenAI Whisper API."
 )
 
 def function_call(video_url: str) -> str:
     """
-    Download audio from the given YouTube URL and return the transcribed text.
+    Download audio from the given YouTube URL and return the transcribed text using OpenAI's Whisper API.
     """
-    # Initialize YouTube and get audio stream
+    # Initialize YouTube and get the audio stream
     yt = YouTube(video_url)
     audio_stream = yt.streams.filter(only_audio=True).first()
-    
-    # Use a temporary directory for download and transcription
+
+    # Use a temporary directory to download and process
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = audio_stream.download(output_path=tmpdir, filename="audio.mp4")
 
-        # Load Whisper model and transcribe
-        model = whisper.load_model("base")
-        result = model.transcribe(audio_path)
-        transcript = result.get("text", "").strip()
+        # Transcribe using OpenAI Whisper API
+        with open(audio_path, "rb") as audio_file:
+            response = openai.Audio.transcriptions.create(
+                file=audio_file,
+                model="whisper-1"
+            )
+        transcript = response.get("text", "").strip()
 
-    # Return the transcript or a message if empty
-    return transcript if transcript else "[No transcript available]"
+    return transcript or "[No transcript available]"
