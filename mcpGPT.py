@@ -23,6 +23,13 @@ DEFAULT_CONFIG = {
     "api_version": "2023-03-15-preview",
     "model": "gpt-4o-mini"
 }
+CREDENTIALS = {
+    "normal": "normal_pass",
+    "admin": "admin_pass",
+    "root": "root_pass"
+}
+# Role-based tool permissions: normal=no tools, admin/all, root/all
+
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
 if 'conversation' not in st.session_state:
@@ -33,6 +40,10 @@ if 'tools' not in st.session_state:
     st.session_state.tools: Dict[str, Any] = {}
 if 'page' not in st.session_state:
     st.session_state.page = 'chat'
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+if 'user' not in st.session_state:
+    st.session_state.user = None
 
 # ---------- UTILS ----------
 def ensure_str(x: Any) -> str:
@@ -97,44 +108,54 @@ def call_llm(messages: List[Dict[str, Any]]):
     )
     return response.choices[0].message
 
-# ---------- SIDEBAR ----------
+# ---------- AUTH ----------
+def login_page():
+    st.title("Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        if username in CREDENTIALS and CREDENTIALS[username] == password:
+            st.session_state.logged_in = True
+            st.session_state.user = username
+            init_openai()
+            load_tools()
+            st.experimental_rerun()
+        else:
+            st.error("Invalid credentials")
+
+# ---------- SIDE BAR ----------
 def sidebar():
-    st.sidebar.title("mcpGPT")
-    # Navigation
+    st.sidebar.title(f"mcpGPT ({st.session_state.user})")
     st.sidebar.radio("Navigation", ["chat", "api", "tools"], index=["chat", "api", "tools"].index(st.session_state.page), key='page')
     st.sidebar.markdown('---')
-    # Tools
     st.sidebar.subheader("🛠 Tools")
     if st.sidebar.button("Reload Tools"):
         load_tools()
         st.sidebar.success("Tools reloaded!")
-    for name in st.session_state.tools:
-        st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
+    # Display tools based on role
+    if st.session_state.user in ['admin', 'root']:
+        for name in st.session_state.tools:
+            st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
+    else:
+        st.sidebar.info("No tools available for your role.")
 
 # ---------- PAGES ----------
 def page_chat():
-    st.header("💬 Chat")
-    # File uploader in chat page
+    st.header(f"💬 Chat - {st.session_state.user}")
     files = st.file_uploader("Upload files to context", type=['pdf','xlsx','xls','docx','pptx','txt','csv'], accept_multiple_files=True)
     for f in files:
         if f and f.name not in st.session_state.files:
             st.session_state.files[f.name] = extract_text(f)
             st.success(f"Processed {f.name}")
-
-    # Display conversation using Streamlit chat UI
     for msg in st.session_state.conversation:
         with st.chat_message(msg['role']):
             st.write(msg['content'])
-
-    # User input
     user_input = st.chat_input("Your message…")
     if user_input:
         st.session_state.conversation.append({"role": "user", "content": user_input})
-        # Prepare messages
         system_ctx = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
         messages = [{"role": "system", "content": system_ctx}]
         messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
-        # Call LLM
         with st.spinner("Thinking…"):
             resp = call_llm(messages)
         text = ensure_str(resp.content)
@@ -168,27 +189,32 @@ def page_tools():
             load_tools()
             st.success("Tool uploaded.")
     with tabs[1]:
-        for name, info in st.session_state.tools.items():
-            with st.expander(name):
-                st.write(info['desc'])
-                st.code(info['code'], language='python')
-                if st.button(f"Delete {name}"):
-                    os.remove(os.path.join('tools', f'tool-{name}.py'))
-                    load_tools()
-                    st.experimental_rerun()
+        # Only admin/root can manage tools
+        if st.session_state.user in ['admin', 'root']:
+            for name, info in st.session_state.tools.items():
+                with st.expander(name):
+                    st.write(info['desc'])
+                    st.code(info['code'], language='python')
+                    if st.button(f"Delete {name}"):
+                        os.remove(os.path.join('tools', f'tool-{name}.py'))
+                        load_tools()
+                        st.experimental_rerun()
+        else:
+            st.info("Tool management reserved for admins.")
 
 # ---------- MAIN ----------
 def main():
-    init_openai()
-    load_tools()
-    sidebar()
-    st.markdown('---')
-    if st.session_state.page == 'chat':
-        page_chat()
-    elif st.session_state.page == 'api':
-        page_api()
+    if not st.session_state.logged_in:
+        login_page()
     else:
-        page_tools()
+        sidebar()
+        st.markdown('---')
+        if st.session_state.page == 'chat':
+            page_chat()
+        elif st.session_state.page == 'api':
+            page_api()
+        else:
+            page_tools()
 
 if __name__ == '__main__':
     main()
