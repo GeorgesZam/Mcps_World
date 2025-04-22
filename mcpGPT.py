@@ -1,5 +1,3 @@
-redonne moi le code complet modifier stp 
-
 import streamlit as st
 from datetime import datetime
 import time
