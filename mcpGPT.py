@@ -523,8 +523,6 @@ def show_chat_page():
                     if "tools_used" in assistant_msg:
                         st.info(f"Tools used: {', '.join(assistant_msg['tools_used'])}")
 
-# Main application
-# ... (le reste du code reste inchangé jusqu'à la fonction main)
 
 # Main application
 def main():
