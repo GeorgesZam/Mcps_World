@@ -522,30 +522,37 @@ def show_chat_page():
                         st.info(f"Tools used: {', '.join(assistant_msg['tools_used'])}")
 
 # Main application
+# ... (le reste du code reste inchangé jusqu'à la fonction main)
+
+# Main application
 def main():
     """Main application flow"""
     load_config()
     init_openai()
     load_tools()
     
+    # Définir les pages disponibles
+    pages = {
+        "Chat": show_chat_page,
+        "API Configuration": show_config_page,
+        "Tool Management": show_tool_management
+    }
+    
+    # Initialiser la page courante si nécessaire
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "Chat"
     
-    # Navigation sidebar
+    # Navigation sidebar avec des boutons au lieu de radio
     st.sidebar.title("Navigation")
-    st.session_state.current_page = st.sidebar.radio(
-        "Go to",
-        ["Chat", "API Configuration", "Tool Management"],
-        index=["Chat", "API Configuration", "Tool Management"].index(st.session_state.current_page)
-    )
+    for page_name in pages.keys():
+        if st.sidebar.button(page_name):
+            st.session_state.current_page = page_name
     
-    # Display current page
-    if st.session_state.current_page == "Chat":
-        show_chat_page()
-    elif st.session_state.current_page == "API Configuration":
-        show_config_page()
-    elif st.session_state.current_page == "Tool Management":
-        show_tool_management()
+    # Afficher un indicateur visuel de la page active
+    st.sidebar.markdown(f"**Page actuelle:** {st.session_state.current_page}")
+    
+    # Afficher la page courante
+    pages[st.session_state.current_page]()
 
 if __name__ == "__main__":
     main()
