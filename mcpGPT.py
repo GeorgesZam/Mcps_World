@@ -28,7 +28,6 @@ CREDENTIALS = {
     "admin": "admin_pass",
     "root": "root_pass"
 }
-# Role-based tool permissions: normal=no tools, admin/all, root/all
 
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
@@ -119,20 +118,25 @@ def login_page():
             st.session_state.user = username
             init_openai()
             load_tools()
-            st.rerun()
+            st.experimental_rerun()
         else:
             st.error("Invalid credentials")
 
 # ---------- SIDE BAR ----------
 def sidebar():
     st.sidebar.title(f"mcpGPT ({st.session_state.user})")
-    st.sidebar.radio("Navigation", ["chat", "api", "tools"], index=["chat", "api", "tools"].index(st.session_state.page), key='page')
+    # Navigation buttons
+    if st.sidebar.button("💬 Chat", key="btn_chat"):
+        st.session_state.page = 'chat'
+    if st.sidebar.button("🔧 API", key="btn_api"):
+        st.session_state.page = 'api'
+    if st.sidebar.button("🛠 Tools", key="btn_tools"):
+        st.session_state.page = 'tools'
     st.sidebar.markdown('---')
     st.sidebar.subheader("🛠 Tools")
     if st.sidebar.button("Reload Tools"):
         load_tools()
         st.sidebar.success("Tools reloaded!")
-    # Display tools based on role
     if st.session_state.user in ['admin', 'root']:
         for name in st.session_state.tools:
             st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
@@ -189,7 +193,6 @@ def page_tools():
             load_tools()
             st.success("Tool uploaded.")
     with tabs[1]:
-        # Only admin/root can manage tools
         if st.session_state.user in ['admin', 'root']:
             for name, info in st.session_state.tools.items():
                 with st.expander(name):
