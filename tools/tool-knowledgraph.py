@@ -4,89 +4,49 @@ function_schema = {
     "properties": {
         "filename": {
             "type": "string",
-            "description": "Nom du fichier SANS extension",
-            "examples": ["mon_knowledge_graph"]
+            "description": "Name of the file WITHOUT extension",
+            "examples": ["my_conceptual_model"]
         },
         "content": {
-            "type": "string", 
-            "description": "Contenu brut du knowledge graph (TTL, RDF/XML, JSON-LD)",
+            "type": "string",
+            "description": "Raw PlantUML content for the MCD diagram",
             "examples": [
-                "@prefix ex: <http://example.com/> .\nex:Alice ex:knows ex:Bob ."
+                "@startuml\nentity Customer {\n  *id : Integer\n  name : String\n}\nentity Order {\n  *id : Integer\n  date : Date\n}\nCustomer ||--o{ Order : places\n@enduml"
             ]
         },
         "filetype": {
             "type": "string",
-            "description": "Format du knowledge graph",
-            "default": "ttl",
-            "enum": ["ttl", "rdf", "jsonld"]
+            "description": "File extension",
+            "default": "puml",
+            "enum": ["puml", "txt", "md"]
         }
     },
     "required": ["filename", "content"]
 }
 
 # Tool description
-description = "Affiche et télécharge un knowledge graph dans Streamlit via NetworkX avec layout physique"
+description = "PlantUML (MCD) file generator with native Streamlit download button"
 
-# Main function (à intégrer dans un script Streamlit)
-def function_call(filename: str, content: str, filetype: str = "ttl"):
-    """Parse le knowledge graph, l'affiche sous forme de graphe interactif avec NetworkX (force-directed) et propose son téléchargement"""
+# Main function (to integrate into your Streamlit app)
+def function_call(filename: str, content: str, filetype: str = "puml"):
+    """Creates a Streamlit download button with file preview for PlantUML diagrams."""
     import streamlit as st
-    from rdflib import Graph
-    import networkx as nx
-    import matplotlib.pyplot as plt
 
-    st.title("Knowledge Graph Viewer")
-    st.write("## Prévisualisation brute")
-    # Affichage brut
-    if filetype == "jsonld":
-        st.json(content)
-    else:
-        st.code(content, language="ttl" if filetype in ["ttl","rdf"] else filetype)
+    # User interface: preview the PlantUML code
+    with st.expander("📁 PlantUML Preview"):
+        st.code(content, language="puml")
 
-    st.write("---")
-    st.write("## Visualisation du graphe (NetworkX avec layout physique)")
+    # Generate the download button
+    st.download_button(
+        label="⬇️ Download PlantUML File",
+        data=content,
+        file_name=f"{filename}.{filetype}",
+        mime="text/plain",
+        key=f"download_{filename}"
+    )
 
-    # Parse et création du graphe RDF
-    rdf_graph = Graph()
-    try:
-        rdf_graph.parse(data=content, format=filetype)
-    except Exception as e:
-        st.error(f"Erreur de parsing du knowledge graph: {e}")
-        return
-
-    # Construction du graphe NetworkX dirigé
-    nx_graph = nx.DiGraph()
-    for subj, pred, obj in rdf_graph:
-        nx_graph.add_edge(str(subj), str(obj), label=str(pred))
-
-    # Calcul du layout physique (force-directed)
-    pos = nx.spring_layout(nx_graph, k=None, iterations=50)
-
-    # Dessin du graphe
-    fig, ax = plt.subplots(figsize=(8, 6))
-    nx.draw_networkx_nodes(nx_graph, pos, ax=ax, node_size=500)
-    nx.draw_networkx_edges(nx_graph, pos, ax=ax, arrowstyle='->')
-    nx.draw_networkx_labels(nx_graph, pos, ax=ax, font_size=8)
-    edge_labels = nx.get_edge_attributes(nx_graph, 'label')
-    nx.draw_networkx_edge_labels(nx_graph, pos, edge_labels=edge_labels, font_size=6)
-    plt.axis('off')
-    st.pyplot(fig)
-
-    st.write("---")
-    # Bouton de téléchargement
-    mime = {
-        "ttl": "text/turtle",
-        "rdf": "application/rdf+xml",
-        "jsonld": "application/ld+json"
-    }.get(filetype, f"text/{filetype}")
-
-    with st.expander("⬇️ Télécharger le knowledge graph"):
-        st.download_button(
-            label="Télécharger",
-            data=content,
-            file_name=f"{filename}.{filetype}",
-            mime=mime,
-            key=f"download_{filename}"
-        )
-
-    return f"Knowledge graph {filename}.{filetype} prêt (taille: {len(content)} octets)"
+    return (
+        "The user now has access to a download button for their PlantUML file. "
+        "You can tell them: 'You can click the Download PlantUML File button above to download your diagram file.' "
+        "Do not provide an external link."
+    )
