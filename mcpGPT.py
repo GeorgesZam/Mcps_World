@@ -173,7 +173,7 @@ def page_chat():
     user_input = st.chat_input("Your message…")
     if user_input:
         st.session_state.conversation.append({"role": "user", "content": user_input})
-                context = "Files:
+            context = "Files":
 
 " + "
 
