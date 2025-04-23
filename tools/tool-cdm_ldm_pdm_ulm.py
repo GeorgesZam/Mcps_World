@@ -9,67 +9,63 @@ function_schema = {
         },
         "content": {
             "type": "string",
-            "description": "Raw PlantUML content for the MCD or other UML diagram",
+            "description": "Raw Mermaid content for the MCD or other UML diagram",
             "examples": [
-                "@startuml\nentity Customer {\n  *id : Integer\n  name : String\n}\nentity Order {\n  *id : Integer\n  date : Date\n}\nCustomer ||--o{ Order : places\n@enduml"
+                "```mermaid\nerDiagram\n    CUSTOMER {\n      integer id\n      string name\n    }\n    ORDER {\n      integer id\n      date date\n    }\n    CUSTOMER ||--o{ ORDER : places\n```"
             ]
         },
         "filetype": {
             "type": "string",
-            "description": "File extension for source (puml) or output format (png)",
-            "default": "puml",
-            "enum": ["puml", "png"]
+            "description": "File extension for source (mmd) or output format (png)",
+            "default": "mmd",
+            "enum": ["mmd", "png"]
         }
     },
     "required": ["filename", "content"]
 }
 
 # Tool description
-description = "PlantUML (MCD & other UML) generator with native Streamlit preview, rendering, and download buttons"
+description = "Mermaid (MCD & other UML) generator with native Streamlit preview, rendering, and download buttons"
 
 # Main function (to integrate into your Streamlit app)
-def function_call(filename: str, content: str, filetype: str = "puml"):
-    """Creates a Streamlit interface to preview PlantUML code, render the diagram, and provide download buttons."""
+def function_call(filename: str, content: str, filetype: str = "mmd"):
+    """Creates a Streamlit interface to preview Mermaid code, render the diagram, and provide download buttons."""
     import streamlit as st
-    from io import BytesIO
-    try:
-        from plantuml import PlantUML
-    except ImportError:
-        st.warning("plantuml package not found. Install via `pip install plantuml` to enable diagram rendering.")
-        PlantUML = None
 
-    # Preview PlantUML source
-    with st.expander("📁 PlantUML Source Preview"):
-        st.code(content, language="puml")
+    # Preview Mermaid source
+    with st.expander("📁 Mermaid Source Preview"):
+        st.code(content, language="mermaid")
 
-    # Render and display diagram if possible
-    if PlantUML:
-        try:
-            server = PlantUML(url="http://www.plantuml.com/plantuml/img/")
-            png_data = server.processes(content)
-            if png_data:
-                st.image(png_data, caption="Rendered Diagram")
-                # Download rendered PNG
-                st.download_button(
-                    label="⬇️ Download Diagram (PNG)",
-                    data=png_data,
-                    file_name=f"{filename}.png",
-                    mime="image/png",
-                    key=f"download_{filename}_png"
-                )
-        except Exception as e:
-            st.error(f"Diagram rendering failed: {e}")
+    # Render and display diagram using Mermaid.js
+    # (requires internet or local Mermaid.js bundle)
+    mermaid_html = f"""
+    <div class="mermaid">
+    {content}
+    </div>
+    <script>
+      if (window.mermaid) {{
+        mermaid.initialize({{ startOnLoad: true }});
+      }} else {{
+        const script = document.createElement('script');
+        script.src = "https://unpkg.com/mermaid@10/dist/mermaid.min.js";
+        script.onload = () => mermaid.initialize({{ startOnLoad: true }});
+        document.head.appendChild(script);
+      }}
+    </script>
+    """
+    st.components.v1.html(mermaid_html, height=400)
 
-    # Download PlantUML source
+    # Download rendered PNG placeholder (actual server-side rendering would require additional tooling)
+    # Here we only offer direct download of Mermaid source
     st.download_button(
-        label="⬇️ Download PlantUML File",
+        label="⬇️ Download Mermaid File",
         data=content,
-        file_name=f"{filename}.puml",
+        file_name=f"{filename}.mmd",
         mime="text/plain",
-        key=f"download_{filename}_puml"
+        key=f"download_{filename}_mmd"
     )
 
     return (
-        "Your PlantUML diagram is ready! You can view or download the source and the rendered image above. "
-        "Click the respective buttons to get your files. do not provides links !!! the user have a bouton to click on !!!"  
+        "Your Mermaid diagram is ready! You can view the source in the expander above, "
+        "see the rendered diagram, and download the .mmd file. Click the respective buttons to get your files."
     )
