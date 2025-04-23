@@ -25,13 +25,15 @@ function_schema = {
 }
 
 # Tool description
-description = "Affiche et télécharge un knowledge graph dans Streamlit avec rendu Graphviz"
+description = "Affiche et télécharge un knowledge graph dans Streamlit via NetworkX avec layout physique"
 
 # Main function (à intégrer dans un script Streamlit)
 def function_call(filename: str, content: str, filetype: str = "ttl"):
-    """Parse le knowledge graph, l'affiche sous forme de graphe interactif et propose son téléchargement"""
+    """Parse le knowledge graph, l'affiche sous forme de graphe interactif avec NetworkX (force-directed) et propose son téléchargement"""
     import streamlit as st
     from rdflib import Graph
+    import networkx as nx
+    import matplotlib.pyplot as plt
 
     st.title("Knowledge Graph Viewer")
     st.write("## Prévisualisation brute")
@@ -42,24 +44,33 @@ def function_call(filename: str, content: str, filetype: str = "ttl"):
         st.code(content, language="ttl" if filetype in ["ttl","rdf"] else filetype)
 
     st.write("---")
-    st.write("## Visualisation du graphe")
+    st.write("## Visualisation du graphe (NetworkX avec layout physique)")
+
     # Parse et création du graphe RDF
-    graph = Graph()
+    rdf_graph = Graph()
     try:
-        graph.parse(data=content, format=filetype)
+        rdf_graph.parse(data=content, format=filetype)
     except Exception as e:
         st.error(f"Erreur de parsing du knowledge graph: {e}")
         return
 
-    # Génération du DOT pour Graphviz
-    dot_lines = ["digraph G {", "  rankdir=LR;", "  node [shape=ellipse];"]
-    for subj, pred, obj in graph:
-        dot_lines.append(f'  "{subj}" -> "{obj}" [label="{pred}"];')
-    dot_lines.append("}")
-    dot_graph = "\n".join(dot_lines)
+    # Construction du graphe NetworkX dirigé
+    nx_graph = nx.DiGraph()
+    for subj, pred, obj in rdf_graph:
+        nx_graph.add_edge(str(subj), str(obj), label=str(pred))
 
-    # Affichage via Graphviz
-    st.graphviz_chart(dot_graph)
+    # Calcul du layout physique (force-directed)
+    pos = nx.spring_layout(nx_graph, k=None, iterations=50)
+
+    # Dessin du graphe
+    fig, ax = plt.subplots(figsize=(8, 6))
+    nx.draw_networkx_nodes(nx_graph, pos, ax=ax, node_size=500)
+    nx.draw_networkx_edges(nx_graph, pos, ax=ax, arrowstyle='->')
+    nx.draw_networkx_labels(nx_graph, pos, ax=ax, font_size=8)
+    edge_labels = nx.get_edge_attributes(nx_graph, 'label')
+    nx.draw_networkx_edge_labels(nx_graph, pos, edge_labels=edge_labels, font_size=6)
+    plt.axis('off')
+    st.pyplot(fig)
 
     st.write("---")
     # Bouton de téléchargement
