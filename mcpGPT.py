@@ -1,257 +1,346 @@
 import streamlit as st
 from datetime import datetime
+import time
 import os
 import json
 import openai
-from typing import Dict, List, Any
-import glob
+from typing import Dict, List
+import base64
+from io import StringIO
 import importlib.util
-import inspect
+import glob
+import ast
+import sys
 import pandas as pd
 from PyPDF2 import PdfReader
 from docx import Document
 import pptx
 
-# ---------- PAGE CONFIG ----------
-st.set_page_config(page_title="mcpGPT", layout="wide")
-
-# ---------- STATE ----------
+# Configuration initiale
 DEFAULT_CONFIG = {
     "api_type": "azure",
     "api_base": "https://your-endpoint.openai.azure.com/",
-    "api_key": "your-api-key",
-    "api_version": "2023-03-15-preview",
-    "model": "gpt-4o-mini"
-}
-CREDENTIALS = {
-    "normal": "normal_pass",
-    "admin": "admin_pass",
-    "root": "root_pass"
+    "api_key": "your-api-key-here",
+    "api_version": "2023-05-15",
+    "model": "gpt-4"
 }
 
-# Initialize session state
+# État de l'application
 if 'config' not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
 if 'conversation' not in st.session_state:
-    st.session_state.conversation: List[Dict[str, Any]] = []
-if 'files' not in st.session_state:
-    st.session_state.files: Dict[str, str] = {}
-if 'tools' not in st.session_state:
-    st.session_state.tools: Dict[str, Any] = {}
-if 'page' not in st.session_state:
-    st.session_state.page = 'chat'
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-if 'user' not in st.session_state:
-    st.session_state.user = None
+    st.session_state.conversation = []
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = {}
+if 'available_tools' not in st.session_state:
+    st.session_state.available_tools = {}
 
-# ---------- UTILS ----------
-def ensure_str(x: Any) -> str:
-    if x is None:
-        return "[No content]"
-    if isinstance(x, (dict, list)):
-        return json.dumps(x, ensure_ascii=False)
-    return str(x)
+# Fonctions utilitaires
+def save_config():
+    """Sauvegarde la configuration dans un fichier"""
+    with open('config.json', 'w') as f:
+        json.dump(st.session_state.config, f)
 
-# ---------- CONFIG HANDLING ----------
+def load_config():
+    """Charge la configuration depuis un fichier"""
+    try:
+        with open('config.json', 'r') as f:
+            st.session_state.config.update(json.load(f))
+    except FileNotFoundError:
+        pass
+
 def init_openai():
-    cfg = st.session_state.config
-    openai.api_type = cfg['api_type']
-    openai.api_base = cfg['api_base']
-    openai.api_key = cfg['api_key']
-    openai.api_version = cfg['api_version']
-    st.session_state.model = cfg['model']
+    """Initialise le client OpenAI"""
+    openai.api_type = st.session_state.config['api_type']
+    openai.api_base = st.session_state.config['api_base']
+    openai.api_key = st.session_state.config['api_key']
+    openai.api_version = st.session_state.config['api_version']
 
-# ---------- TOOL MANAGEMENT ----------
-def load_tools():
-    st.session_state.tools.clear()
-    os.makedirs('tools', exist_ok=True)
-    for path in glob.glob('tools/tool-*.py'):
-        name = os.path.splitext(os.path.basename(path))[0].replace('tool-', '')
-        spec = importlib.util.spec_from_file_location(name, path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        st.session_state.tools[name] = {
-            'func': mod.function_call,
-            'schema': getattr(mod, 'function_schema', {}),
-            'desc': getattr(mod, 'description', ''),
-            'code': inspect.getsource(mod)
-        }
+# Fonctions pour les fichiers
+def extract_text_from_pdf(file):
+    """Extrait le texte d'un PDF"""
+    pdf_reader = PdfReader(file)
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text()
+    return text
 
-# ---------- FILE PROCESSING ----------
-def extract_text(file) -> str:
-    ext = file.name.split('.')[-1].lower()
-    if ext == 'pdf':
-        reader = PdfReader(file)
-        return "\n".join(p.extract_text() or "" for p in reader.pages)
-    if ext in ('xlsx', 'xls'):
-        return pd.read_excel(file).to_markdown()
-    if ext == 'docx':
-        return "\n".join(p.text for p in Document(file).paragraphs)
-    if ext == 'pptx':
-        return "\n".join(
-            shp.text
-            for prs in pptx.Presentation(file).slides
-            for shp in prs.shapes if hasattr(shp, 'text')
-        )
-    if ext in ('txt', 'csv'):
+def extract_text_from_excel(file):
+    """Extrait le texte d'un fichier Excel"""
+    df = pd.read_excel(file)
+    return df.to_markdown()
+
+def extract_text_from_word(file):
+    """Extrait le texte d'un document Word"""
+    doc = Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def extract_text_from_ppt(file):
+    """Extrait le texte d'une présentation PowerPoint"""
+    prs = pptx.Presentation(file)
+    text = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text.append(shape.text)
+    return "\n".join(text)
+
+def process_uploaded_file(file):
+    """Traite un fichier uploadé selon son type"""
+    file_ext = file.name.split('.')[-1].lower()
+    
+    if file_ext == 'pdf':
+        return extract_text_from_pdf(file)
+    elif file_ext in ['xlsx', 'xls']:
+        return extract_text_from_excel(file)
+    elif file_ext == 'docx':
+        return extract_text_from_word(file)
+    elif file_ext == 'pptx':
+        return extract_text_from_ppt(file)
+    elif file_ext == 'txt':
         return file.read().decode('utf-8')
-    return f"Unsupported format: {file.name}"
+    else:
+        return f"Contenu du fichier {file.name} non extrait (format non supporté)"
 
-# ---------- LLM & TOOL EXECUTION ----------
-def get_tools_schema() -> List[Dict[str, Any]]:
+# Fonctions pour les outils
+def load_tools():
+    """Charge les outils depuis le dossier tools/"""
+    tools_dir = 'tools'
+    os.makedirs(tools_dir, exist_ok=True)
+    
+    for tool_path in glob.glob(os.path.join(tools_dir, 'tool-*.py')):
+        try:
+            tool_name = os.path.splitext(os.path.basename(tool_path))[0].replace('tool-', '')
+            spec = importlib.util.spec_from_file_location(tool_name, tool_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            
+            st.session_state.available_tools[tool_name] = {
+                'function': mod.function_call,
+                'schema': getattr(mod, 'function_schema', {})
+            }
+        except Exception as e:
+            st.error(f"Erreur de chargement de l'outil {tool_path}: {str(e)}")
+
+def get_tools_schema():
+    """Retourne le schéma des outils pour OpenAI"""
     return [
-        {"name": n, "description": t['desc'], "parameters": t['schema']}
-        for n, t in st.session_state.tools.items()
+        {
+            "name": name,
+            "description": f"Exécute la fonction {name}",
+            "parameters": info['schema']
+        } for name, info in st.session_state.available_tools.items()
     ]
 
-# Authenticated chat call handling
+# Fonction principale de chat
+def chat_with_llm(messages: List[Dict]) -> Dict:
+    """Envoie les messages à l'API OpenAI"""
+    try:
+        tools = get_tools_schema()
+        response = openai.ChatCompletion.create(
+            engine=st.session_state.config['model'],
+            messages=messages,
+            tools=[{"type": "function", "function": t} for t in tools] if tools else None,
+            tool_choice="auto" if tools else None,
+        )
+        
+        return response.choices[0].message
+    except Exception as e:
+        st.error(f"Erreur OpenAI: {str(e)}")
+        return None
 
-def call_llm(messages: List[Dict[str, Any]]):
-    tools = get_tools_schema()
-    return openai.ChatCompletion.create(
-        engine=st.session_state.model,
-        messages=messages,
-        tools=[{"type": "function", "function": t} for t in tools] if tools else None,
-        tool_choice="auto" if tools else None
-    ).choices[0]
-
-# ---------- AUTH ----------
-def login_page():
-    st.title("Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    if st.button("Login"):
-        if username in CREDENTIALS and CREDENTIALS[username] == password:
-            st.session_state.logged_in = True
-            st.session_state.user = username
+# Interface utilisateur
+def show_config_page():
+    """Affiche la page de configuration"""
+    st.title("🔧 Configuration de l'API")
+    
+    with st.form("api_config"):
+        #st.session_state.config['api_type'] =
+        st.selectbox(
+            "Type d'API",
+            ["azure", "openai"],
+            index=0 if st.session_state.config['api_type'] == "azure" else 1,
+            key = "TYPE_API"
+        )
+        
+        st.session_state.config['api_base'] = st.text_input(
+            "Endpoint API",
+            value=st.session_state.config['api_base']
+        )
+        
+        st.session_state.config['api_key'] = st.text_input(
+            "Clé API",
+            type="password",
+            value=st.session_state.config['api_key']
+        )
+        
+        st.session_state.config['api_version'] = st.text_input(
+            "Version API",
+            value=st.session_state.config['api_version']
+        )
+        
+        st.session_state.config['model'] = st.text_input(
+            "Modèle",
+            value=st.session_state.config['model']
+        )
+        
+        if st.form_submit_button("Sauvegarder la configuration"):
+            save_config()
             init_openai()
+            st.success("Configuration sauvegardée!")
+
+def show_chat_page():
+    """Affiche la page de chat principale"""
+    st.title("💬 Chat Intelligent")
+    
+    # Sidebar pour les fichiers et outils
+    with st.sidebar:
+        st.header("📁 Fichiers")
+        uploaded_files = st.file_uploader(
+            "Ajouter des fichiers",
+            type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt'],
+            accept_multiple_files=True
+        )
+        
+        for file in uploaded_files:
+            if file.name not in st.session_state.uploaded_files:
+                content = process_uploaded_file(file)
+                st.session_state.uploaded_files[file.name] = content
+                st.success(f"Fichier {file.name} traité!")
+        
+        st.header("🛠 Outils")
+        if st.button("Recharger les outils"):
             load_tools()
-            st.rerun()
-        else:
-            st.error("Invalid credentials")
-
-# ---------- SIDE BAR ----------
-def sidebar():
-    st.sidebar.title(f"mcpGPT ({st.session_state.user})")
-    # Navigation
-    if st.sidebar.button("💬 Chat"):
-        st.session_state.page = 'chat'
-    if st.sidebar.button("🔧 API"):
-        st.session_state.page = 'api'
-    if st.sidebar.button("🛠 Tools"):
-        st.session_state.page = 'tools'
-    st.sidebar.markdown('---')
-    st.sidebar.subheader("🛠 Available Tools")
-    if st.sidebar.button("Reload Tools"):
-        load_tools(); st.sidebar.success("Tools reloaded")
-    if st.session_state.user in ['admin', 'root']:
-        for name in st.session_state.tools:
-            st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
-    else:
-        st.sidebar.info("No tools available for your role.")
-
-# ---------- PAGES ----------
-def page_chat():
-    st.header(f"💬 Chat - {st.session_state.user}")
-    uploaded = st.file_uploader(
-        "Upload files to context (PDF, Excel, Word, PPTX, TXT, CSV)",
-        type=['pdf','xlsx','xls','docx','pptx','txt','csv'],
-        accept_multiple_files=True
-    )
-    for f in uploaded:
-        if f and f.name not in st.session_state.files:
-            st.session_state.files[f.name] = extract_text(f)
-            st.success(f"Processed {f.name}")
-
-    # Display conversation
+            st.success("Outils rechargés!")
+        
+        st.write("Outils disponibles:")
+        for tool_name in st.session_state.available_tools:
+            st.write(f"- {tool_name}")
+    
+    # Afficher l'historique
     for msg in st.session_state.conversation:
-        with st.chat_message(msg['role']):
-            st.write(msg['content'])
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            if msg.get("timestamp"):
+                st.caption(f"À {msg['timestamp']}")
+    
+    # Gestion des messages
+    if prompt := st.chat_input("Votre message..."):
+        now = datetime.now().strftime("%H:%M:%S")
+        
+        # Ajouter le message utilisateur
+        user_msg = {"role": "user", "content": prompt, "timestamp": now}
+        st.session_state.conversation.append(user_msg)
+        
+        with st.chat_message("user"):
+            st.write(prompt)
+            st.caption(f"À {now}")
+        
+        with st.spinner("Réflexion..."):
+            start_time = time.time()
+            
+            # Préparer le contexte avec les fichiers uploadés
+            context = []
+            if st.session_state.uploaded_files:
+                context.append({
+                    "role": "system",
+                    "content": "Fichiers joints:\n" + "\n\n".join(
+                        f"=== {name} ===\n{content}" 
+                        for name, content in st.session_state.uploaded_files.items()
+                    )
+                })
+            
+            # Ajouter l'historique de conversation
+            messages = context + [
+                {"role": msg["role"], "content": msg["content"]} 
+                for msg in st.session_state.conversation
+                if msg["role"] in ["user", "assistant", "system"]
+            ]
+            
+            # Premier appel au LLM
+            response = chat_with_llm(messages)
+            
+            if response:
+                # Gestion des outils
+                if hasattr(response, 'tool_calls') and response.tool_calls:
+                    # Exécuter les outils
+                    tool_responses = []
+                    for call in response.tool_calls:
+                        tool_name = call.function.name
+                        if tool_name in st.session_state.available_tools:
+                            try:
+                                args = json.loads(call.function.arguments)
+                                result = st.session_state.available_tools[tool_name]['function'](**args)
+                                tool_responses.append({
+                                    "role": "tool",
+                                    "content": str(result),
+                                    "name": tool_name,
+                                    "tool_call_id": call.id
+                                })
+                            except Exception as e:
+                                tool_responses.append({
+                                    "role": "tool",
+                                    "content": f"Erreur: {str(e)}",
+                                    "name": tool_name,
+                                    "tool_call_id": call.id
+                                })
+                    
+                    # Ajouter les réponses des outils
+                    messages.append({
+                        "role": response.role,
+                        "content": response.content,
+                        "tool_calls": response.tool_calls
+                    })
+                    messages.extend(tool_responses)
+                    
+                    # Deuxième appel avec les résultats des outils
+                    final_response = chat_with_llm(messages)
+                    
+                    if final_response:
+                        assistant_msg = {
+                            "role": "assistant",
+                            "content": final_response.content,
+                            "timestamp": datetime.now().strftime("%H:%M:%S")
+                        }
+                    else:
+                        assistant_msg = {
+                            "role": "assistant",
+                            "content": "Erreur lors de la réponse finale",
+                            "timestamp": datetime.now().strftime("%H:%M:%S")
+                        }
+                else:
+                    # Réponse simple sans outils
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": response.content,
+                        "timestamp": datetime.now().strftime("%H:%M:%S")
+                    }
+                
+                # Ajouter à la conversation
+                st.session_state.conversation.append(assistant_msg)
+                
+                # Afficher la réponse
+                with st.chat_message("assistant"):
+                    st.write(assistant_msg["content"])
+                    st.caption(f"Réponse en {time.time()-start_time:.2f}s à {assistant_msg['timestamp']}")
 
-    # User input
-    user_input = st.chat_input("Your message…")
-    if user_input:
-        context = "Files:\n" + "\n".join(f"=== {n} === {c}" for n, c in st.session_state.files.items())
-        messages = [{"role": "system", "content": context}]
-        messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
-
-        with st.spinner("Processing…"):
-            # First LLM call
-            choice = call_llm(messages)
-
-        # Handle function call
-        if hasattr(choice, 'function_call') and choice.function_call:
-            fn_call = choice.function_call
-            fname = fn_call.name
-            args = json.loads(fn_call.arguments)
-            func = st.session_state.tools.get(fname, {}).get('func')
-            result = func(**args) if func else None
-            tool_content = ensure_str(result)
-
-            # Add tool result back into messages
-            messages.append({"role": "assistant", "content": "", "function_call": fn_call})
-            messages.append({"role": "tool", "name": fname, "content": tool_content})
-            with st.spinner("Finalizing…"):
-                final_choice = openai.ChatCompletion.create(
-                    engine=st.session_state.model,
-                    messages=messages
-                ).choices[0].message
-            content = ensure_str(final_choice.content)
-        else:
-            # Normal response
-            content = ensure_str(choice.content)
-
-        st.session_state.conversation.append({"role": "assistant", "content": content})
-        st.rerun()
-
-
-def page_api():
-    st.header("🔧 API Configuration")
-    cfg = st.session_state.config
-    with st.form("api_cfg"):
-        cfg['api_type'] = st.selectbox("API Type", ["azure","openai"], index=["azure","openai"].index(cfg['api_type']))
-        cfg['api_base'] = st.text_input("Endpoint", cfg['api_base'])
-        cfg['api_key'] = st.text_input("Key", cfg['api_key'], type="password")
-        cfg['api_version'] = st.text_input("Version", cfg['api_version'])
-        cfg['model'] = st.text_input("Model", cfg['model'])
-        if st.form_submit_button("Save Config"):
-            init_openai(); st.success("Configuration saved!")
-
-
-def page_tools():
-    st.header("🔧 Tool Management")
-    up_tab, ex_tab = st.tabs(["Upload","Existing"])
-    with up_tab:
-        uploaded_tool = st.file_uploader("Upload .py tool", type='py')
-        if uploaded_tool:
-            path = os.path.join('tools', uploaded_tool.name)
-            with open(path,'wb') as wf: wf.write(uploaded_tool.getbuffer())
-            load_tools(); st.success("Tool uploaded.")
-    with ex_tab:
-        if st.session_state.user in ['admin','root']:
-            for name, info in st.session_state.tools.items():
-                with st.expander(name):
-                    st.write(info['desc'])
-                    st.code(info['code'], language='python')
-                    if st.button(f"Delete {name}"):
-                        os.remove(os.path.join('tools', f'tool-{name}.py'))
-                        load_tools(); st.experimental_rerun()
-        else:
-            st.info("Admin privileges required to manage tools.")
-
-# ---------- MAIN ----------
+# Page principale
 def main():
-    if not st.session_state.logged_in:
-        login_page()
-    else:
-        sidebar(); st.markdown('---')
-        if st.session_state.page == 'chat':
-            page_chat()
-        elif st.session_state.page == 'api':
-            page_api()
-        else:
-            page_tools()
+    """Gestion des pages de l'application"""
+    load_config()
+    init_openai()
+    load_tools()
+    
+    pages = {
+        "Chat": show_chat_page,
+        "Configuration": show_config_page
+    }
+    
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Aller à", list(pages.keys()))
+    
+    # Afficher la page sélectionnée
+    pages[page]()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
