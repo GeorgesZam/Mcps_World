@@ -9,4 +9,5 @@ python-pptx
 pandas
 bs4
 pytube
+networkX
 wisper
