@@ -127,7 +127,7 @@ def login_page():
             st.session_state.user = username
             init_openai()
             load_tools()
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Invalid credentials")
 
@@ -203,7 +203,7 @@ def page_chat():
             content = ensure_str(choice.content)
 
         st.session_state.conversation.append({"role": "assistant", "content": content})
-        st.experimental_rerun()
+        st.rerun()
 
 
 def page_api():
