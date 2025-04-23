@@ -3,7 +3,7 @@ from datetime import datetime
 import os
 import json
 import openai
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import glob
 import importlib.util
 import inspect
@@ -56,7 +56,6 @@ def init_openai():
     openai.api_base = cfg['api_base']
     openai.api_key = cfg['api_key']
     openai.api_version = cfg['api_version']
-    # Ensure next calls use updated model
     st.session_state.model = cfg['model']
 
 # ---------- TOOL MANAGEMENT ----------
@@ -86,30 +85,36 @@ def extract_text(file) -> str:
     if ext == 'docx':
         return "\n".join(p.text for p in Document(file).paragraphs)
     if ext == 'pptx':
-        return "\n".join(
-            shp.text for prs in pptx.Presentation(file).slides
-            for shp in prs.shapes if hasattr(shp, 'text')
-        )
+        prs = pptx.Presentation(file)
+        texts = []
+        for slide in prs.slides:
+            for shp in slide.shapes:
+                if hasattr(shp, 'text'):
+                    texts.append(shp.text)
+        return "\n".join(texts)
     if ext in ('txt', 'csv'):
         return file.read().decode('utf-8')
     return f"Unsupported format: {file.name}"
 
 # ---------- OPENAI CALL ----------
 def get_functions() -> List[Dict[str, Any]]:
-    return [
-        {"name": n, "description": t['desc'], "parameters": t['schema']}
-        for n, t in st.session_state.tools.items()
-    ]
+    return [{
+        "name": name,
+        "description": info['desc'],
+        "parameters": info['schema']
+    } for name, info in st.session_state.tools.items()]
 
-def call_llm(messages: List[Dict[str, Any]]):
-    # Use model parameter instead of engine
+
+def call_llm(messages: List[Dict[str, Any]]) -> openai.ChatCompletionResponseMessage:
+    kwargs: Dict[str, Any] = {
+        "model": st.session_state.model,
+        "messages": messages
+    }
     funcs = get_functions()
-    response = openai.ChatCompletion.create(
-        model=st.session_state.model,
-        messages=messages,
-        functions=funcs if funcs else None,
-        function_call="auto" if funcs else None
-    )
+    if funcs:
+        kwargs["functions"] = funcs
+        kwargs["function_call"] = "auto"
+    response = openai.ChatCompletion.create(**kwargs)
     return response.choices[0].message
 
 # ---------- AUTH ----------
@@ -123,7 +128,6 @@ def login_page():
             st.session_state.user = username
             init_openai()
             load_tools()
-            # Reset conversation on login
             st.session_state.conversation = []
         else:
             st.error("Invalid credentials. Please try again.")
@@ -131,12 +135,10 @@ def login_page():
 # ---------- SIDEBAR ----------
 def sidebar():
     st.sidebar.title(f"mcpGPT ({st.session_state.user})")
-    # Navigation
     if st.sidebar.button("💬 Chat"): st.session_state.page = 'chat'
     if st.sidebar.button("🔧 API"): st.session_state.page = 'api'
     if st.sidebar.button("🛠 Tools"): st.session_state.page = 'tools'
     st.sidebar.markdown('---')
-    # Tools section
     st.sidebar.subheader("🛠 Available Tools")
     if st.sidebar.button("Reload Tools"): load_tools(); st.sidebar.success("Tools reloaded")
     if st.session_state.user in ['admin', 'root']:
@@ -144,7 +146,6 @@ def sidebar():
             st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
     else:
         st.sidebar.info("No tools available for your role.")
-    # Files in sidebar
     st.sidebar.subheader("📁 Files")
     files = st.sidebar.file_uploader(
         "Upload files to context", type=['pdf','xlsx','xls','docx','pptx','txt','csv'],
@@ -158,26 +159,28 @@ def sidebar():
 # ---------- PAGES ----------
 def page_chat():
     st.header(f"💬 Chat - {st.session_state.user}")
-    # Display conversation
     for msg in st.session_state.conversation:
-        with st.chat_message(msg['role']): st.write(msg['content'])
+        with st.chat_message(msg['role']):
+            st.write(msg['content'])
     user_input = st.chat_input("Your message…")
     if user_input:
         st.session_state.conversation.append({"role": "user", "content": user_input})
-        # Compile context
-        ctx = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
-        messages = [{"role": "system", "content": ctx}]
-        messages += [{"role":m['role'], "content":m['content']} for m in st.session_state.conversation]
+        context_str = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
+        messages = [{"role": "system", "content": context_str}]
+        messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
         with st.spinner("Thinking…"):
             msg = call_llm(messages)
-        # Handle function calls
+        # Handle function calls if any
         if msg.get("function_call"):
-            name = msg["function_call"]["name"]
-            args = json.loads(msg["function_call"]["arguments"])
-            result = st.session_state.tools[name]['func'](**args)
-            st.session_state.conversation.append({"role": "tool", "content": ensure_str(result)})
-            messages.append({"role":"tool", "name":name, "content":ensure_str(result)})
-            msg = call_llm(messages)
+            fn = msg["function_call"]
+            fname = fn["name"]
+            fargs = json.loads(fn["arguments"])
+            result = st.session_state.tools[fname]['func'](**fargs)
+            tool_content = ensure_str(result)
+            st.session_state.conversation.append({"role": "tool", "content": tool_content})
+            messages.append({"role": "tool", "content": tool_content, "name": fname})
+            with st.spinner("Finalizing…"):
+                msg = call_llm(messages)
         reply = ensure_str(msg.get("content"))
         st.session_state.conversation.append({"role": "assistant", "content": reply})
         with st.chat_message("assistant"): st.write(reply)
@@ -199,20 +202,21 @@ def page_api():
 
 def page_tools():
     st.header("🔧 Tool Management")
-    up, ex = st.tabs(["Upload","Existing"])
-    with up:
+    upload_tab, existing_tab = st.tabs(["Upload","Existing"])
+    with upload_tab:
         f = st.file_uploader("Upload .py tool", type='py')
         if f:
-            path = os.path.join('tools',f.name)
-            with open(path,'wb') as wf: wf.write(f.getbuffer())
+            path = os.path.join('tools', f.name)
+            with open(path, 'wb') as wf: wf.write(f.getbuffer())
             load_tools()
             st.success("Tool uploaded")
-    with ex:
+    with existing_tab:
         if st.session_state.user in ['admin','root']:
-            for n, info in st.session_state.tools.items():
-                with st.expander(n):
-                    st.write(info['desc']); st.code(info['code'],language='python')
-                    if st.button(f"Delete {n}"): os.remove(os.path.join('tools',f'tool-{n}.py')); load_tools()
+            for name, info in st.session_state.tools.items():
+                with st.expander(name):
+                    st.write(info['desc'])
+                    st.code(info['code'], language='python')
+                    if st.button(f"Delete {name}"): os.remove(os.path.join('tools', f'tool-{name}.py')); load_tools()
         else:
             st.info("Admin privileges required.")
 
@@ -221,9 +225,14 @@ def main():
     if not st.session_state.logged_in:
         login_page()
     else:
-        sidebar(); st.markdown('---')
-        if st.session_state.page=='chat': page_chat()
-        elif st.session_state.page=='api': page_api()
-        else: page_tools()
+        sidebar()
+        st.markdown('---')
+        if st.session_state.page == 'chat':
+            page_chat()
+        elif st.session_state.page == 'api':
+            page_api()
+        else:
+            page_tools()
 
-if __name__=='__main__': main()
+if __name__ == '__main__':
+    main()
