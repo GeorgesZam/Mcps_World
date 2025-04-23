@@ -172,13 +172,7 @@ def page_chat():
     # User input
     user_input = st.chat_input("Your message…")
     if user_input:
-        st.session_state.conversation.append({"role": "user", "content": user_input})
-        context = "Files:
-
-" + "
-
-".join(f"=== {n} ===
-{c}" for n, c in st.session_state.files.items())
+        context = "Files:\n" + "\n".join(f"=== {n} === {c}" for n, c in st.session_state.files.items())
         messages = [{"role": "system", "content": context}]
         messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
 
