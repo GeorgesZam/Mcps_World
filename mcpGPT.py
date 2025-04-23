@@ -105,7 +105,7 @@ def get_functions() -> List[Dict[str, Any]]:
     } for name, info in st.session_state.tools.items()]
 
 
-def call_llm(messages: List[Dict[str, Any]]) -> openai.ChatCompletionResponseMessage:
+def call_llm(messages: List[Dict[str, Any]]):
     kwargs: Dict[str, Any] = {
         "model": st.session_state.model,
         "messages": messages
