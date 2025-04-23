@@ -23,8 +23,8 @@ DEFAULT_CONFIG = {
     "api_type": "azure",
     "api_base": "https://your-endpoint.openai.azure.com/",
     "api_key": "your-api-key-here",
-    "api_version": "2023-05-15",
-    "model": "gpt-4"
+    "api_version": "2023-03-15-preview",
+    "model": "gpt-4o-mini"
 }
 
 # Application state
@@ -60,6 +60,9 @@ def save_config():
 
 def load_config():
     """Load configuration from file"""
+
+    return
+    
     try:
         with open('config.json', 'r') as f:
             st.session_state.config.update(json.load(f))
@@ -340,24 +343,28 @@ def show_config_page():
     st.title("🔧 API Configuration")
     
     with st.form("api_config"):
-        st.session_state.config['api_type'] = st.selectbox(
+        #st.session_state.config['api_type'] 
+        api_type = st.selectbox(
             "API Type",
             ["azure", "openai"],
             index=0 if st.session_state.config['api_type'] == "azure" else 1
         )
         
-        st.session_state.config['api_base'] = st.text_input(
+        # st.session_state.config['api_base'] 
+        api_base = st.text_input(
             "API Endpoint",
             value=st.session_state.config['api_base']
         )
         
-        st.session_state.config['api_key'] = st.text_input(
+        # st.session_state.config['api_key'] = 
+        api_key = st.text_input(
             "API Key",
             type="password",
             value=st.session_state.config['api_key']
         )
         
-        st.session_state.config['api_version'] = st.text_input(
+        # st.session_state.config['api_version'] = 
+        api_version = st.text_input(
             "API Version",
             value=st.session_state.config['api_version']
         )
@@ -368,7 +375,14 @@ def show_config_page():
         )
         
         if st.form_submit_button("Save Configuration"):
-            save_config()
+            # save_config()
+            if "config" not in st.session_state:
+                st.session_state["config"] = {}
+            st.session_state.config["api_type"] = api_type
+            st.session_state.config["api_base"] = api_base
+            st.session_state.config["api_key"] = api_key
+            st.session_state.config["api_version"] = api_version
+
             init_openai()
             st.success("Configuration saved!")
 
@@ -381,7 +395,7 @@ def show_chat_page():
         st.header("📁 Files")
         uploaded_files = st.file_uploader(
             "Upload files",
-            type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt'],
+            type=['pdf', 'xlsx', 'xls', 'docx', 'pptx', 'txt', 'csv'],
             accept_multiple_files=True
         )
         
