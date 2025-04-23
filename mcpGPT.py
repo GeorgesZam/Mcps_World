@@ -120,13 +120,23 @@ def get_tools_schema():
 
 # ---------- CHAT WITH LLM ----------
 def chat_with_llm(messages: List[Dict]) -> Any:
+    """Envoie les messages à l'API OpenAI, gérant Azure vs OpenAI classique"""
     try:
+        cfg = st.session_state.config
         tools = get_tools_schema()
-        kwargs = { 'model': st.session_state.model, 'messages': messages }
+        # Préparer arguments communs
+        common = { 'messages': messages }
+        # Cas Azure: utiliser 'engine' (deployment_id)
+        if cfg['api_type'] == 'azure':
+            common['engine'] = cfg['model']
+        else:
+            common['model'] = cfg['model']
+        # Ajouter les fonctions si présentes
         if tools:
-            kwargs['functions'] = tools
-            kwargs['function_call'] = 'auto'
-        resp = openai.ChatCompletion.create(**kwargs)
+            common['functions'] = tools
+            common['function_call'] = 'auto'
+        # Appel
+        resp = openai.ChatCompletion.create(**common)
         return resp.choices[0].message
     except Exception as e:
         st.error(f"OpenAI error: {e}")
