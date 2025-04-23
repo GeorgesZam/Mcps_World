@@ -43,7 +43,6 @@ def function_call(filename: str, content: str, filetype: str = "py"):
         key=f"download_{filename}"
     )
 
-    # (Optionnel) Affichage d'une vidéo associée
-    st.video("https://www.youtube.com/watch?v=Uw5OLnN7UvM")
+    st.video("https://www.youtube.com/watch?v=v2eNUENWi2k")
 
     return f"Fichier {filename}.{filetype} prêt au téléchargement (Taille : {len(content)} octets)"
