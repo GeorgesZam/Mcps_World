@@ -164,7 +164,7 @@ def page_chat():
             resp = call_llm(messages)
         text = ensure_str(resp.content)
         st.session_state.conversation.append({"role": "assistant", "content": text})
-        st.experimental_rerun()
+        st.rerun()
 
 
 def page_api():
