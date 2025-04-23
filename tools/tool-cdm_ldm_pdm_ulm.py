@@ -71,5 +71,5 @@ def function_call(filename: str, content: str, filetype: str = "puml"):
 
     return (
         "Your PlantUML diagram is ready! You can view or download the source and the rendered image above. "
-        "Click the respective buttons to get your files."  
+        "Click the respective buttons to get your files. do not provides links !!! the user have a bouton to click on !!!"  
     )
