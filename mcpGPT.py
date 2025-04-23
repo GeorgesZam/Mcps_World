@@ -118,7 +118,7 @@ def login_page():
             st.session_state.user = username
             init_openai()
             load_tools()
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Invalid credentials")
 
