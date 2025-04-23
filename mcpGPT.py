@@ -118,7 +118,7 @@ def login_page():
             st.session_state.user = username
             init_openai()
             load_tools()
-            st.rerun()
+            st.experimental_rerun()
         else:
             st.error("Invalid credentials")
 
@@ -151,23 +151,59 @@ def page_chat():
         if f and f.name not in st.session_state.files:
             st.session_state.files[f.name] = extract_text(f)
             st.success(f"Processed {f.name}")
+    # Display conversation
     for msg in st.session_state.conversation:
         with st.chat_message(msg['role']):
             st.write(msg['content'])
+    # User input
     user_input = st.chat_input("Your message…")
     if user_input:
         st.session_state.conversation.append({"role": "user", "content": user_input})
-        system_ctx = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
+        # Prepare messages for LLM
+        system_ctx = "Files:
+" + "
+
+".join(f"=== {n} ===
+{c}" for n, c in st.session_state.files.items())
         messages = [{"role": "system", "content": system_ctx}]
         messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
+        # First LLM call
         with st.spinner("Thinking…"):
-            resp = call_llm(messages)
-        text = ensure_str(resp.content)
-        st.session_state.conversation.append({"role": "assistant", "content": text})
-        st.rerun()
+            resp = openai.ChatCompletion.create(
+                engine=st.session_state.model,
+                messages=messages,
+                tools=[{"type": "function", "function": t} for t in get_tools_schema()] if st.session_state.tools else None,
+                tool_choice="auto" if st.session_state.tools else None,
+            )
+        msg = resp.choices[0].message
+        # Check for tool call
+        if hasattr(msg, 'function_call') and msg.function_call:
+            fname = msg.function_call.name
+            args = json.loads(msg.function_call.arguments)
+            # Execute tool
+            tool_func = st.session_state.tools.get(fname, {}).get('func')
+            result = None
+            if tool_func:
+                result = tool_func(**args)
+            tool_content = ensure_str(result)
+            # Append tool response and call LLM again
+            messages.append({"role": "assistant", "content": "", "function_call": msg.function_call})
+            messages.append({"role": "tool", "name": fname, "content": tool_content})
+            with st.spinner("Processing tool..."):
+                final_resp = openai.ChatCompletion.create(
+                    engine=st.session_state.model,
+                    messages=messages
+                )
+            final_msg = final_resp.choices[0].message.content
+            st.session_state.conversation.append({"role": "assistant", "content": final_msg})
+        else:
+            # Normal response
+            content = ensure_str(msg.content)
+            st.session_state.conversation.append({"role": "assistant", "content": content})
+        st.experimental_rerun()
 
 
-def page_api():
+def page_api():"():
     st.header("🔧 API Configuration")
     cfg = st.session_state.config
     with st.form("cfg"):
