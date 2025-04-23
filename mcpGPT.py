@@ -23,8 +23,8 @@ DEFAULT_CONFIG = {
     "api_type": "azure",
     "api_base": "https://your-endpoint.openai.azure.com/",
     "api_key": "your-api-key-here",
-    "api_version": "2023-03-15-preview",
-    "model": "gpt-4o-mini"
+    "api_version": "2023-05-15",
+    "model": "gpt-4"
 }
 
 # Application state
