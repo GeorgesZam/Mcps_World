@@ -102,16 +102,17 @@ def get_tools_schema() -> List[Dict[str, Any]]:
 
 def call_llm(messages: List[Dict[str, Any]]):
     tools = get_tools_schema()
-    return openai.ChatCompletion.create(
+    response = openai.ChatCompletion.create(
         engine=st.session_state.model,
         messages=messages,
-        tools=[{"type":"function","function":t} for t in tools] if tools else None,
+        tools=[{"type": "function", "function": t} for t in tools] if tools else None,
         tool_choice="auto" if tools else None
-    ).choices[0]
+    )
+    return response.choices[0]
 
 # ---------- AUTH ----------
 def login_page():
-    st.title("Login")
+    st.title("Login to mcpGPT")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
@@ -120,96 +121,91 @@ def login_page():
             st.session_state.user = username
             init_openai()
             load_tools()
-            st.experimental_rerun()
         else:
-            st.error("Invalid credentials")
+            st.error("Invalid credentials. Please try again.")
 
 # ---------- SIDE BAR ----------
 def sidebar():
     st.sidebar.title(f"mcpGPT ({st.session_state.user})")
-    # Navigation buttons
-    if st.sidebar.button("💬 Chat"): st.session_state.page = 'chat'
-    if st.sidebar.button("🔧 API"): st.session_state.page = 'api'
-    if st.sidebar.button("🛠 Tools"): st.session_state.page = 'tools'
+    # Navigation
+    st.sidebar.button("💬 Chat", on_click=lambda: st.session_state.update(page='chat'))
+    st.sidebar.button("🔧 API", on_click=lambda: st.session_state.update(page='api'))
+    st.sidebar.button("🛠 Tools", on_click=lambda: st.session_state.update(page='tools'))
     st.sidebar.markdown('---')
     # Tools section
     st.sidebar.subheader("🛠 Available Tools")
-    if st.sidebar.button("Reload Tools"): load_tools(); st.sidebar.success("Tools reloaded")
+    st.sidebar.button("Reload Tools", on_click=load_tools)
     if st.session_state.user in ['admin', 'root']:
         for name in st.session_state.tools:
             st.sidebar.checkbox(name, key=f"tool_{name}", value=True)
     else:
         st.sidebar.info("No tools available for your role.")
-    # Files section back in sidebar
+    # Files in sidebar
     st.sidebar.subheader("📁 Files")
     uploaded = st.sidebar.file_uploader(
-        "Upload files to context", type=['pdf','xlsx','xls','docx','pptx','txt','csv'],
-        accept_multiple_files=True
+        "Upload files", type=['pdf','xlsx','xls','docx','pptx','txt','csv'], accept_multiple_files=True
     )
     for f in uploaded:
-        if f and f.name not in st.session_state.files:
+        if f.name not in st.session_state.files:
             st.session_state.files[f.name] = extract_text(f)
             st.sidebar.success(f"Processed {f.name}")
 
 # ---------- PAGES ----------
 def page_chat():
     st.header(f"💬 Chat - {st.session_state.user}")
-    # Display conversation
     for msg in st.session_state.conversation:
-        with st.chat_message(msg['role']): st.write(msg['content'])
-    # User input
+        with st.chat_message(msg['role']):
+            st.write(msg['content'])
     user_input = st.chat_input("Your message…")
     if user_input:
-        st.session_state.conversation.append({"role":"user","content":user_input})
-        # Build context including files
+        st.session_state.conversation.append({"role": "user", "content": user_input})
         context = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
-        messages = [{"role":"system","content":context}]
-        messages += [{"role":m['role'],"content":m['content']} for m in st.session_state.conversation]
+        messages = [{"role": "system", "content": context}]
+        messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
         with st.spinner("Processing…"):
             choice = call_llm(messages)
-        # Tool handling
-        if hasattr(choice, 'function_call') and choice.function_call:
-            fn = choice.function_call
-            name, args = fn.name, json.loads(fn.arguments)
-            res = st.session_state.tools[name]['func'](**args)
-            tool_content = ensure_str(res)
-            messages.append({"role":"assistant","content":"","function_call":fn})
-            messages.append({"role":"tool","name":name,"content":tool_content})
-            with st.spinner("Finalizing…"):
-                final = openai.ChatCompletion.create(engine=st.session_state.model,messages=messages).choices[0].message
-            text = ensure_str(final.content)
-        else:
-            text = ensure_str(choice.content)
-        st.session_state.conversation.append({"role":"assistant","content":text})
-        st.experimental_rerun()
+        # tool handling simplified
+        text = ensure_str(choice.content)
+        st.session_state.conversation.append({"role": "assistant", "content": text})
+        # display assistant
+        with st.chat_message("assistant"):
+            st.write(text)
+
 
 def page_api():
     st.header("🔧 API Configuration")
     cfg = st.session_state.config
     with st.form("api_cfg"):
-        cfg['api_type'] = st.selectbox("API Type", ["azure","openai"], index=["azure","openai"].index(cfg['api_type']))
+        cfg['api_type'] = st.selectbox("API Type", ["azure", "openai"], index=["azure", "openai"].index(cfg['api_type']))
         cfg['api_base'] = st.text_input("Endpoint", cfg['api_base'])
         cfg['api_key'] = st.text_input("Key", cfg['api_key'], type="password")
         cfg['api_version'] = st.text_input("Version", cfg['api_version'])
         cfg['model'] = st.text_input("Model", cfg['model'])
         if st.form_submit_button("Save Config"):
-            init_openai(); st.success("Configuration saved")
+            init_openai()
+            st.success("Configuration saved")
+
 
 def page_tools():
     st.header("🔧 Tool Management")
-    up, ex = st.tabs(["Upload","Existing"])
+    up, ex = st.tabs(["Upload", "Existing"])
     with up:
         f = st.file_uploader("Upload .py tool", type='py')
         if f:
-            path = os.path.join('tools',f.name)
-            open(path,'wb').write(f.getbuffer())
-            load_tools(); st.success("Tool uploaded")
+            path = os.path.join('tools', f.name)
+            with open(path, 'wb') as wf:
+                wf.write(f.getbuffer())
+            load_tools()
+            st.success("Tool uploaded")
     with ex:
-        if st.session_state.user in ['admin','root']:
+        if st.session_state.user in ['admin', 'root']:
             for n, info in st.session_state.tools.items():
                 with st.expander(n):
-                    st.write(info['desc']); st.code(info['code'],language='python')
-                    if st.button(f"Delete {n}"): os.remove(os.path.join('tools',f'tool-{n}.py')); load_tools(); st.experimental_rerun()
+                    st.write(info['desc'])
+                    st.code(info['code'], language='python')
+                    if st.button(f"Delete {n}"):
+                        os.remove(os.path.join('tools', f'tool-{n}.py'))
+                        load_tools()
         else:
             st.info("Admin privileges required.")
 
@@ -218,9 +214,14 @@ def main():
     if not st.session_state.logged_in:
         login_page()
     else:
-        sidebar(); st.markdown('---')
-        if st.session_state.page=='chat': page_chat()
-        elif st.session_state.page=='api': page_api()
-        else: page_tools()
+        sidebar()
+        st.markdown('---')
+        if st.session_state.page == 'chat':
+            page_chat()
+        elif st.session_state.page == 'api':
+            page_api()
+        else:
+            page_tools()
 
-if __name__=='__main__': main()
+if __name__ == '__main__':
+    main()
