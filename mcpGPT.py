@@ -173,33 +173,39 @@ def page_chat():
     user_input = st.chat_input("Your message…")
     if user_input:
         st.session_state.conversation.append({"role": "user", "content": user_input})
-        context = "Files:\n" + "\n\n".join(f"=== {n} ===\n{c}" for n, c in st.session_state.files.items())
+        context = "Files:
+" + "
+
+".join(f"=== {n} ===
+{c}" for n, c in st.session_state.files.items())
         messages = [{"role": "system", "content": context}]
         messages += [{"role": m['role'], "content": m['content']} for m in st.session_state.conversation]
 
         with st.spinner("Processing…"):
-            llm_msg = call_llm(messages)
+            # First LLM call
+            choice = call_llm(messages)
 
-        # If function call requested
-        if llm_msg.get("function_call"):
-            fn_call = llm_msg["function_call"]
-            fname = fn_call["name"]
-            args = json.loads(fn_call["arguments"])
+        # Handle function call
+        if hasattr(choice, 'function_call') and choice.function_call:
+            fn_call = choice.function_call
+            fname = fn_call.name
+            args = json.loads(fn_call.arguments)
             func = st.session_state.tools.get(fname, {}).get('func')
             result = func(**args) if func else None
             tool_content = ensure_str(result)
 
-            # Add tool result back into conversation
+            # Add tool result back into messages
             messages.append({"role": "assistant", "content": "", "function_call": fn_call})
             messages.append({"role": "tool", "name": fname, "content": tool_content})
             with st.spinner("Finalizing…"):
-                final_resp = openai.ChatCompletion.create(
+                final_choice = openai.ChatCompletion.create(
                     engine=st.session_state.model,
                     messages=messages
                 ).choices[0].message
-            content = ensure_str(final_resp["content"])
+            content = ensure_str(final_choice.content)
         else:
-            content = ensure_str(llm_msg["content"])
+            # Normal response
+            content = ensure_str(choice.content)
 
         st.session_state.conversation.append({"role": "assistant", "content": content})
         st.experimental_rerun()
