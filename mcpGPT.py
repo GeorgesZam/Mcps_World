@@ -535,5 +535,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-ajoute une page id et mots de passe avant de montrer le site 
