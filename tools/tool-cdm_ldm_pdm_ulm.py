@@ -1,4 +1,3 @@
-# Tool schema
 function_schema = {
     "type": "object",
     "properties": {
@@ -11,7 +10,7 @@ function_schema = {
             "type": "string",
             "description": "Raw Mermaid content for the MCD or other UML diagram",
             "examples": [
-                "```mermaid\nerDiagram\n    CUSTOMER {\n      integer id\n      string name\n    }\n    ORDER {\n      integer id\n      date date\n    }\n    CUSTOMER ||--o{ ORDER : places\n```"
+                "erDiagram\n    CUSTOMER {\n      integer id\n      string name\n    }\n    ORDER {\n      integer id\n      date date\n    }\n    CUSTOMER ||--o{ ORDER : places"
             ]
         },
         "filetype": {
@@ -23,21 +22,17 @@ function_schema = {
     },
     "required": ["filename", "content"]
 }
-
-# Tool description
-description = "Mermaid (MCD & other UML) generator with native Streamlit preview, rendering, and download buttons"
-
-# Main function (to integrate into your Streamlit app)
 def function_call(filename: str, content: str, filetype: str = "mmd"):
     """Creates a Streamlit interface to preview Mermaid code, render the diagram, and provide download buttons."""
     import streamlit as st
+
+    st.title("📊 Mermaid Diagram Generator")
 
     # Preview Mermaid source
     with st.expander("📁 Mermaid Source Preview"):
         st.code(content, language="mermaid")
 
-    # Render and display diagram using Mermaid.js
-    # (requires internet or local Mermaid.js bundle)
+    # Mermaid rendering
     mermaid_html = f"""
     <div class="mermaid">
     {content}
@@ -53,10 +48,10 @@ def function_call(filename: str, content: str, filetype: str = "mmd"):
       }}
     </script>
     """
-    st.components.v1.html(mermaid_html, height=400)
 
-    # Download rendered PNG placeholder (actual server-side rendering would require additional tooling)
-    # Here we only offer direct download of Mermaid source
+    st.components.v1.html(mermaid_html, height=400, scrolling=True)
+
+    # Download button
     st.download_button(
         label="⬇️ Download Mermaid File",
         data=content,
@@ -66,6 +61,6 @@ def function_call(filename: str, content: str, filetype: str = "mmd"):
     )
 
     return (
-        "Your Mermaid diagram is ready! You can view the source in the expander above, "
-        "see the rendered diagram, and download the .mmd file. Click the respective buttons to get your files."
+        "✅ Mermaid diagram ready! You can preview the source, render it live, "
+        "and download the Mermaid file for reuse or modification."
     )
